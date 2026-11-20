@@ -29,6 +29,8 @@ local function Main()
 
     local HttpService = game:GetService("HttpService")
 
+    local Stats = game:GetService("Stats")
+
 
 
     local player = Players.LocalPlayer
@@ -192,6 +194,284 @@ local function Main()
         ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 
     }, parent)
+
+
+
+    -- Top-right compact draggable FPS & Ping HUD pill
+
+    local hudPill = make("Frame",{
+
+        Name="FpsPingHud",
+
+        Size=UDim2.fromOffset(176,30),
+
+        Position=UDim2.new(1,-190,0,14),
+
+        BackgroundColor3=C.bg,
+
+        BorderSizePixel=0,
+
+        Visible=true
+
+    },gui)
+
+    corner(hudPill,15)
+
+    outline(hudPill)
+
+
+
+    local hudDot = make("Frame",{
+
+        Name="AccentDot",
+
+        Size=UDim2.fromOffset(8,8),
+
+        Position=UDim2.new(0,11,0.5,-4),
+
+        BackgroundColor3=C.ACCENT,
+
+        BorderSizePixel=0
+
+    },hudPill)
+
+    corner(hudDot,4)
+
+
+
+    local hudFpsLabel = make("TextLabel",{
+
+        Name="FpsText",
+
+        Size=UDim2.fromOffset(72,20),
+
+        Position=UDim2.new(0,24,0.5,-10),
+
+        BackgroundTransparency=1,
+
+        Text="FPS: --",
+
+        Font=Enum.Font.GothamBold,
+
+        TextSize=11,
+
+        TextColor3=C.text,
+
+        TextXAlignment=Enum.TextXAlignment.Left
+
+    },hudPill)
+
+
+
+    local hudSep = make("TextLabel",{
+
+        Name="Separator",
+
+        Size=UDim2.fromOffset(10,20),
+
+        Position=UDim2.new(0,95,0.5,-10),
+
+        BackgroundTransparency=1,
+
+        Text="·",
+
+        Font=Enum.Font.GothamBold,
+
+        TextSize=12,
+
+        TextColor3=C.sub,
+
+        TextXAlignment=Enum.TextXAlignment.Center
+
+    },hudPill)
+
+
+
+    local hudPingLabel = make("TextLabel",{
+
+        Name="PingText",
+
+        Size=UDim2.fromOffset(66,20),
+
+        Position=UDim2.new(0,106,0.5,-10),
+
+        BackgroundTransparency=1,
+
+        Text="Ping: --ms",
+
+        Font=Enum.Font.GothamBold,
+
+        TextSize=11,
+
+        TextColor3=C.good,
+
+        TextXAlignment=Enum.TextXAlignment.Left
+
+    },hudPill)
+
+
+
+    local hudDragging,hudDragStart,hudStartPos=false,nil,nil
+
+    hudPill.InputBegan:Connect(function(input)
+
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+
+            hudDragging=true
+
+            hudDragStart=input.Position
+
+            hudStartPos=hudPill.Position
+
+        end
+
+    end)
+
+
+
+    UIS.InputChanged:Connect(function(input)
+
+        if hudDragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then
+
+            local delta=input.Position-hudDragStart
+
+            hudPill.Position=UDim2.new(
+
+                hudStartPos.X.Scale,
+
+                hudStartPos.X.Offset+delta.X,
+
+                hudStartPos.Y.Scale,
+
+                hudStartPos.Y.Offset+delta.Y
+
+            )
+
+        end
+
+    end)
+
+
+
+    UIS.InputEnded:Connect(function(input)
+
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+
+            hudDragging=false
+
+        end
+
+    end)
+
+
+
+    local fpsAccumFrames=0
+
+    local fpsAccumTime=0
+
+    local pingAccumTime=0
+
+    local hudEnabled=true
+
+
+
+    local function readPingMs()
+
+        local ok,pingVal=pcall(function()
+
+            local net=Stats and Stats:FindFirstChild("Network")
+
+            local item=net and net:FindFirstChild("ServerStatsItem")
+
+            local pingItem=item and item:FindFirstChild("Data Ping")
+
+            if pingItem and pingItem.GetValue then
+
+                return pingItem:GetValue()
+
+            end
+
+            return nil
+
+        end)
+
+        if ok and type(pingVal)=="number" and pingVal>=0 then
+
+            return math.floor(pingVal+0.5)
+
+        end
+
+        local ok2,pingSec=pcall(function()
+
+            return player:GetNetworkPing()
+
+        end)
+
+        if ok2 and type(pingSec)=="number" and pingSec>=0 then
+
+            return math.floor(pingSec*1000+0.5)
+
+        end
+
+        return nil
+
+    end
+
+
+
+    local function stepFpsPingHud(dt)
+
+        if not hudEnabled or not hudPill or not hudPill.Parent then return end
+
+        local step=dt or 0.016
+
+        fpsAccumFrames=fpsAccumFrames+1
+
+        fpsAccumTime=fpsAccumTime+step
+
+        pingAccumTime=pingAccumTime+step
+
+
+
+        if fpsAccumTime>=0.35 then
+
+            local fps=math.clamp(math.floor((fpsAccumFrames/fpsAccumTime)+0.5),1,999)
+
+            fpsAccumFrames=0
+
+            fpsAccumTime=0
+
+            hudFpsLabel.Text="FPS: "..tostring(fps)
+
+            hudFpsLabel.TextColor3=fps>=50 and C.text or (fps>=25 and C.sub or C.bad)
+
+        end
+
+
+
+        if pingAccumTime>=0.6 then
+
+            pingAccumTime=0
+
+            local ms=readPingMs()
+
+            if ms~=nil then
+
+                hudPingLabel.Text="Ping: "..tostring(ms).."ms"
+
+                hudPingLabel.TextColor3=ms<=100 and C.good or (ms<=200 and C.sub or C.bad)
+
+            else
+
+                hudPingLabel.Text="Ping: --ms"
+
+                hudPingLabel.TextColor3=C.sub
+
+            end
+
+        end
+
+    end
 
 
 
@@ -2792,6 +3072,15 @@ local function Main()
         setStatus(v and "NAME ESP ON" or "NAME ESP OFF")
     end)
 
+    local hudToggle=toggleRow(visualRight,1,"FPS & Ping HUD","Top-right draggable counter pill",nil,function(v)
+        hudEnabled=v
+        if hudPill and hudPill.Parent then
+            hudPill.Visible=v
+        end
+        setStatus(v and "FPS & PING HUD ON" or "FPS & PING HUD OFF")
+    end)
+    hudToggle.Set(true,true)
+
     Players.PlayerRemoving:Connect(function(p)
         removeBoxDrawing(p)
         removeTracerDrawing(p)
@@ -3408,6 +3697,12 @@ local function Main()
 
         logoGradient.Color=ColorSequence.new(C.ACCENT,Color3.fromRGB(157,116,190))
 
+        if hudDot and hudDot.Parent then
+
+            hudDot.BackgroundColor3=C.ACCENT
+
+        end
+
         setStatus("UPDATED "..key:upper().." COLOUR")
 
     end
@@ -3663,6 +3958,8 @@ local function Main()
 
         antiVoidOn=false
 
+        hudEnabled=false
+
         restoreAntiFlingCollisions()
 
         destroyWaterPart()
@@ -3826,6 +4123,8 @@ local function Main()
 
 
     RunService.RenderStepped:Connect(function(dt)
+
+        stepFpsPingHud(dt)
 
         stepWalkOnWater()
 
