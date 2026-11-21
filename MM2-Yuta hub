@@ -5,7 +5,7 @@
 -- By biyxznd
 -- Discord: https://discord.gg/QxRKp9wNeE
 
--- RIGHT SHIFT = Open / Close Menu | F = Toggle Spider Fly | END = Emergency Stop
+-- RIGHT SHIFT = Open / Close Menu | END = Emergency Stop | F = Toggle Fly
 
 if getgenv and getgenv().IdenticalMM2Unload then
     pcall(getgenv().IdenticalMM2Unload)
@@ -99,6 +99,7 @@ local Config = {
     JumpValue = 50,
     InfiniteJump = false,
     Noclip = false,
+    Fly = false,
     FlySpeed = 75,
 
     AntiVoid = true,
@@ -220,6 +221,14 @@ local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
 
+-- Attached ESP & Fly State
+local FLY_TOGGLE_KEY = Enum.KeyCode.F
+local STANDALONE_ESP_ENABLED = true
+local STANDALONE_ESP_COLOR = Color3.fromRGB(211, 164, 232)
+local flying = false
+local bv, bg, flyConn
+local standaloneHighlights = {}
+
 local function fireTouch(part1, part2)
     if firetouchinterest and part1 and part2 then
         local ft = firetouchinterest
@@ -273,6 +282,139 @@ end
 local function getHumanoid(char)
     if not char then return nil end
     return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getCharParts()
+    local char = LocalPlayer.Character
+    return char, char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function stopFly()
+    flying = false
+    Config.Fly = false
+    if flyConn then
+        flyConn:Disconnect()
+        flyConn = nil
+    end
+    if bv then
+        pcall(function() bv:Destroy() end)
+        bv = nil
+    end
+    if bg then
+        pcall(function() bg:Destroy() end)
+        bg = nil
+    end
+    local _, _, hum = getCharParts()
+    if hum then
+        hum.PlatformStand = false
+    end
+end
+
+local function startFly()
+    stopFly()
+    local _, root, hum = getCharParts()
+    if not root or not hum then return end
+
+    flying = true
+    Config.Fly = true
+    bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+    bv.P = 18000
+    bv.Velocity = Vector3.zero
+    bv.Parent = root
+
+    bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+    bg.P = 14000
+    bg.CFrame = root.CFrame
+    bg.Parent = root
+
+    hum.PlatformStand = true
+
+    flyConn = RunService.RenderStepped:Connect(function(dt)
+        local curChar, curRoot, curHum = getCharParts()
+        if not flying or not curChar or not curRoot or not curRoot.Parent or not curHum then
+            stopFly()
+            return
+        end
+        if not bv or not bv.Parent or not bg or not bg.Parent then
+            stopFly()
+            return
+        end
+
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+
+        local moveDir = Vector3.zero
+        local verticalInput = 0
+
+        if not UserInputService:GetFocusedTextBox() then
+            local forward = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+            if forward.Magnitude > 1e-4 then forward = forward.Unit else forward = Vector3.new(0, 0, -1) end
+
+            local rightVec = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
+            if rightVec.Magnitude > 1e-4 then rightVec = rightVec.Unit else rightVec = Vector3.new(1, 0, 0) end
+
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += forward end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= forward end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += rightVec end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= rightVec end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then verticalInput += 1 end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then verticalInput -= 1 end
+        end
+
+        local stickDir = curHum.MoveDirection
+        if stickDir.Magnitude > 0.05 then
+            moveDir += Vector3.new(stickDir.X, 0, stickDir.Z)
+        end
+
+        if moveDir.Magnitude > 1 then
+            moveDir = moveDir.Unit
+        end
+
+        local flySpeed = tonumber(Config.FlySpeed) or 75
+        local targetVel = moveDir * flySpeed + Vector3.new(0, verticalInput * (flySpeed * 0.75), 0)
+        bv.Velocity = bv.Velocity:Lerp(targetVel, math.clamp((dt or 0.016) * 10, 0.1, 1))
+
+        local lookDir = moveDir.Magnitude > 0.05 and moveDir or Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+        if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, -1) else lookDir = lookDir.Unit end
+        bg.CFrame = CFrame.lookAt(curRoot.Position, curRoot.Position + lookDir)
+    end)
+end
+
+local function clearStandalonePlayerEsp(p)
+    if standaloneHighlights[p] then
+        pcall(function() standaloneHighlights[p]:Destroy() end)
+        standaloneHighlights[p] = nil
+    end
+end
+
+local function applyStandalonePlayerEsp(p)
+    if p == LocalPlayer or not STANDALONE_ESP_ENABLED or not p.Character then return end
+    clearStandalonePlayerEsp(p)
+
+    local hl = Instance.new("Highlight")
+    hl.Name = "StandaloneEspHighlight"
+    hl.FillColor = STANDALONE_ESP_COLOR
+    hl.FillTransparency = 0.6
+    hl.OutlineColor = Color3.new(1, 1, 1)
+    hl.OutlineTransparency = 0.15
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Adornee = p.Character
+    hl.Parent = p.Character
+    standaloneHighlights[p] = hl
+end
+
+local function refreshAllStandaloneEsp()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            if STANDALONE_ESP_ENABLED then
+                applyStandalonePlayerEsp(p)
+            else
+                clearStandalonePlayerEsp(p)
+            end
+        end
+    end
 end
 
 local function isPlayerAlive(p)
@@ -450,278 +592,6 @@ local function interactWithGunDrop(gunPart, gunObj)
     end
 end
 
--- Spider-Man Web Fly system
-local FLY_TOGGLE_KEY = Enum.KeyCode.F
-local spiderFlying = false
-local swingPhase = 0
-local mobileJumpBoostUntil = 0
-local flyBV, flyBG, flyConn, flyJumpConn, flyCharAddedConn
-local webAnchor, webBeam, rootAtt, anchorAtt
-local savedJoints = {}
-
-local function getSpiderChar()
-    local char = LocalPlayer.Character
-    return char, char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function findJoint(char, names)
-    for _, desc in ipairs(char:GetDescendants()) do
-        if desc:IsA("Motor6D") then
-            for _, n in ipairs(names) do
-                if desc.Name == n or (desc.Part1 and desc.Part1.Name == n) then
-                    return desc
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function capturePoseJoints(char)
-    savedJoints = {}
-    if not char then return end
-    local specs = {
-        waist = { "Waist", "RootJoint" },
-        neck = { "Neck" },
-        rShoulder = { "RightShoulder", "Right Shoulder" },
-        lShoulder = { "LeftShoulder", "Left Shoulder" },
-        rHip = { "RightHip", "Right Hip" },
-        lHip = { "LeftHip", "Left Hip" },
-        rKnee = { "RightKnee" },
-        lKnee = { "LeftKnee" }
-    }
-    for key, names in pairs(specs) do
-        local j = findJoint(char, names)
-        if j then
-            savedJoints[key] = { joint = j, c0 = j.C0 }
-        end
-    end
-end
-
-local function applyJointOffset(entry, offsetCFrame, alpha)
-    if not entry or not entry.joint or not entry.joint.Parent then return end
-    local goal = entry.c0 * offsetCFrame
-    entry.joint.C0 = entry.joint.C0:Lerp(goal, math.clamp(alpha, 0, 1))
-end
-
-local function restorePoseJoints()
-    for _, entry in pairs(savedJoints) do
-        if entry and entry.joint and entry.joint.Parent then
-            pcall(function()
-                entry.joint.C0 = entry.c0
-            end)
-        end
-    end
-    savedJoints = {}
-end
-
-local function clearWebVisual()
-    if webBeam then pcall(function() webBeam:Destroy() end) webBeam = nil end
-    if rootAtt then pcall(function() rootAtt:Destroy() end) rootAtt = nil end
-    if anchorAtt then pcall(function() anchorAtt:Destroy() end) anchorAtt = nil end
-    if webAnchor then pcall(function() webAnchor:Destroy() end) webAnchor = nil end
-end
-
-local function stopSpiderFly()
-    spiderFlying = false
-    swingPhase = 0
-    if flyConn then flyConn:Disconnect() flyConn = nil end
-    if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
-    if flyBG then pcall(function() flyBG:Destroy() end) flyBG = nil end
-    clearWebVisual()
-    restorePoseJoints()
-    local _, _, hum = getSpiderChar()
-    if hum then hum.PlatformStand = false end
-end
-
-local function getWebAnchor(root, cam, char)
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    if char then rayParams.FilterDescendantsInstances = { char } end
-    local dir = (cam.CFrame.LookVector * 0.45 + Vector3.new(0, 0.85, 0)).Unit * 140
-    local hit = Workspace:Raycast(root.Position + Vector3.new(0, 2, 0), dir, rayParams)
-    if hit then return hit.Position end
-    return root.Position + cam.CFrame.LookVector * 36 + Vector3.new(0, 48, 0)
-end
-
-local function ensureWebVisual(root, anchorPos)
-    if not root or not root.Parent then return end
-    if not webAnchor or not webAnchor.Parent then
-        webAnchor = Instance.new("Part")
-        webAnchor.Name = "SpiderWebAnchor"
-        webAnchor.Size = Vector3.new(0.2, 0.2, 0.2)
-        webAnchor.Anchored = true
-        webAnchor.CanCollide = false
-        webAnchor.Transparency = 1
-        webAnchor.Parent = Workspace
-    end
-    webAnchor.Position = anchorPos
-
-    if not rootAtt or not rootAtt.Parent then
-        rootAtt = Instance.new("Attachment")
-        rootAtt.Name = "SpiderRootAtt"
-        rootAtt.Parent = root
-    end
-    if not anchorAtt or not anchorAtt.Parent then
-        anchorAtt = Instance.new("Attachment")
-        anchorAtt.Name = "SpiderAnchorAtt"
-        anchorAtt.Parent = webAnchor
-    end
-    if not webBeam or not webBeam.Parent then
-        webBeam = Instance.new("Beam")
-        webBeam.Name = "SpiderWebLine"
-        webBeam.Attachment0 = rootAtt
-        webBeam.Attachment1 = anchorAtt
-        webBeam.Color = ColorSequence.new(Color3.fromRGB(220, 225, 255), Color3.fromRGB(255, 255, 255))
-        webBeam.Width0 = 0.14
-        webBeam.Width1 = 0.08
-        webBeam.FaceCamera = true
-        webBeam.LightEmission = 0.35
-        webBeam.Parent = webAnchor
-    end
-end
-
-local function updateSpiderBodyPose(curRoot, lookDir, roll, pitch, swingArc, dt)
-    local blend = math.clamp((dt or 0.016) * 12, 0.1, 1)
-    local reachRight = swingArc >= 0
-
-    applyJointOffset(savedJoints.waist, CFrame.Angles(0.14 + math.abs(pitch) * 0.25, math.sin(swingPhase) * 0.22, -roll * 0.45), blend)
-    applyJointOffset(savedJoints.neck, CFrame.Angles(-pitch * 0.45 - 0.12, 0, -roll * 0.35), blend)
-
-    if reachRight then
-        local lift = 0.55 + math.max(0, swingArc) * 0.45
-        applyJointOffset(savedJoints.rShoulder, CFrame.Angles(math.rad(125 + lift * 35), 0, math.rad(-22)), blend)
-        applyJointOffset(savedJoints.lShoulder, CFrame.Angles(math.rad(-28 - swingArc * 18), 0, math.rad(26)), blend)
-    else
-        local lift = 0.55 + math.max(0, -swingArc) * 0.45
-        applyJointOffset(savedJoints.lShoulder, CFrame.Angles(math.rad(125 + lift * 35), 0, math.rad(22)), blend)
-        applyJointOffset(savedJoints.rShoulder, CFrame.Angles(math.rad(-28 + swingArc * 18), 0, math.rad(-26)), blend)
-    end
-
-    local legKick = math.sin(swingPhase) * 0.32
-    applyJointOffset(savedJoints.rHip, CFrame.Angles(-0.38 + legKick, 0.08, -0.08), blend)
-    applyJointOffset(savedJoints.lHip, CFrame.Angles(-0.22 - legKick, -0.08, 0.08), blend)
-    applyJointOffset(savedJoints.rKnee, CFrame.Angles(-math.max(0, 0.45 + legKick * 0.7), 0, 0), blend)
-    applyJointOffset(savedJoints.lKnee, CFrame.Angles(-math.max(0, 0.35 - legKick * 0.7), 0, 0), blend)
-
-    local baseCFrame = CFrame.lookAt(curRoot.Position, curRoot.Position + lookDir)
-    flyBG.CFrame = baseCFrame * CFrame.Angles(pitch, 0, roll)
-end
-
-local function startSpiderFly()
-    stopSpiderFly()
-    local char, root, hum = getSpiderChar()
-    if not root or not hum then return false end
-
-    spiderFlying = true
-    swingPhase = 0
-    capturePoseJoints(char)
-
-    flyBV = Instance.new("BodyVelocity")
-    flyBV.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-    flyBV.P = 18000
-    flyBV.Velocity = Vector3.zero
-    flyBV.Parent = root
-
-    flyBG = Instance.new("BodyGyro")
-    flyBG.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-    flyBG.P = 14000
-    flyBG.CFrame = root.CFrame
-    flyBG.Parent = root
-
-    hum.PlatformStand = true
-
-    flyConn = RunService.RenderStepped:Connect(function(dt)
-        local curChar, curRoot, curHum = getSpiderChar()
-        if not spiderFlying or not curChar or not curRoot or not curRoot.Parent or not curHum then
-            stopSpiderFly()
-            return
-        end
-        if not flyBV or not flyBV.Parent or not flyBG or not flyBG.Parent then
-            stopSpiderFly()
-            return
-        end
-
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-
-        local flySpeed = tonumber(Config.FlySpeed) or 75
-        local moveDir = Vector3.zero
-        local verticalInput = 0
-
-        if not UserInputService:GetFocusedTextBox() then
-            local forward = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-            if forward.Magnitude > 1e-4 then forward = forward.Unit else forward = Vector3.new(0, 0, -1) end
-            local rightVec = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
-            if rightVec.Magnitude > 1e-4 then rightVec = rightVec.Unit else rightVec = Vector3.new(1, 0, 0) end
-
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + rightVec end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - rightVec end
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then verticalInput = verticalInput + 1 end
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then verticalInput = verticalInput - 1 end
-        end
-
-        local stickDir = curHum.MoveDirection
-        if stickDir.Magnitude > 0.05 then
-            moveDir = moveDir + Vector3.new(stickDir.X, 0, stickDir.Z)
-        end
-        if os.clock() < mobileJumpBoostUntil then
-            verticalInput = verticalInput + 1
-        end
-
-        if moveDir.Magnitude > 1 then moveDir = moveDir.Unit end
-
-        local activeMove = moveDir.Magnitude > 0.05 or math.abs(verticalInput) > 0.05
-        swingPhase = swingPhase + (dt or 0.016) * (activeMove and 5.4 or 1.8)
-        local swingArc = math.sin(swingPhase)
-        local pendulumLift = swingArc * (flySpeed * 0.18)
-        local targetVel = moveDir * flySpeed + Vector3.new(0, verticalInput * (flySpeed * 0.75) + pendulumLift, 0)
-
-        flyBV.Velocity = flyBV.Velocity:Lerp(targetVel, math.clamp((dt or 0.016) * 9, 0.08, 1))
-
-        local anchorPos = getWebAnchor(curRoot, cam, curChar)
-        ensureWebVisual(curRoot, anchorPos)
-
-        local lookDir = moveDir.Magnitude > 0.05 and moveDir or Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-        if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, -1) else lookDir = lookDir.Unit end
-
-        local pitch = -math.clamp(flyBV.Velocity.Y / math.max(flySpeed, 1), -0.45, 0.55) - 0.16
-        local roll = -swingArc * 0.24
-        updateSpiderBodyPose(curRoot, lookDir, roll, pitch, swingArc, dt)
-    end)
-
-    return true
-end
-
-local function toggleSpiderFly()
-    if spiderFlying then
-        stopSpiderFly()
-    else
-        startSpiderFly()
-    end
-end
-
-table.insert(activeConnections, UserInputService.InputBegan:Connect(function(input, processed)
-    if processed then return end
-    if input.KeyCode == FLY_TOGGLE_KEY then
-        toggleSpiderFly()
-    end
-end))
-
-flyJumpConn = UserInputService.JumpRequest:Connect(function()
-    if spiderFlying then
-        mobileJumpBoostUntil = os.clock() + 0.35
-    end
-end)
-table.insert(activeConnections, flyJumpConn)
-
-flyCharAddedConn = LocalPlayer.CharacterAdded:Connect(function()
-    stopSpiderFly()
-end)
-table.insert(activeConnections, flyCharAddedConn)
-
 -- Forward UI & Action references
 local isSyncingUI = false
 local SyncUIWithConfig = function() end
@@ -744,20 +614,12 @@ local sheriffRow = { SetValue = function(_) end, SetColor = function(_) end }
 
 local Actions = {}
 
-function Actions.SetFlyEnabled(enabled)
-    if enabled then
-        startSpiderFly()
-    else
-        stopSpiderFly()
-    end
-end
-
 function Actions.CopyDiscord()
     if setclipboard then
         setclipboard(DISCORD_INVITE)
-        SendNotification("Discord", "Copied invite link: " .. DISCORD_INVITE, 3)
+        SendNotification("DARK MOON", "Discord invite copied: " .. DISCORD_INVITE, 3)
     else
-        SendNotification("Discord", DISCORD_INVITE, 4)
+        SendNotification("DARK MOON", DISCORD_INVITE, 4)
     end
 end
 
@@ -875,6 +737,7 @@ function Actions.ReloadConfig()
 end
 
 function Actions.ResetDefaults()
+    stopFly()
     for k, v in pairs(DefaultConfig) do
         Config[k] = v
     end
@@ -2166,7 +2029,7 @@ local function Main()
         corner(row, 9)
 
         make("TextLabel", {
-            Size = UDim2.new(0.42, -14, 1, 0),
+            Size = UDim2.new(0.45, -14, 1, 0),
             Position = UDim2.fromOffset(14, 0),
             BackgroundTransparency = 1,
             Text = title,
@@ -2177,8 +2040,8 @@ local function Main()
         }, row)
 
         local valLbl = make("TextLabel", {
-            Size = UDim2.new(0.56, -14, 1, 0),
-            Position = UDim2.new(0.42, 0, 0, 0),
+            Size = UDim2.new(0.53, -14, 1, 0),
+            Position = UDim2.new(0.45, 0, 0, 0),
             BackgroundTransparency = 1,
             Text = tostring(initialValue or ""),
             Font = Enum.Font.GothamBold,
@@ -2215,30 +2078,30 @@ local function Main()
         return b
     end
 
-    -- 1. HOME TAB
+    -- 1. HOME TAB (WITH DISCORD INVITE)
     local homeTab = newTab("Home", 1)
-    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS, DISCORD & ROLES")
-    local homeRight = column(homeTab, 0.5, 0.5, "QUICK ACTIONS & CONFIG")
+    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS & ROLES")
+    local homeRight = column(homeTab, 0.5, 0.5, "DISCORD, ACTIONS & CONFIG")
 
-    infoRow(homeLeft, 1, "Discord", DISCORD_INVITE, C.ACCENT)
-    buttonRow(homeLeft, 2, "COPY DISCORD INVITE", C.row, Actions.CopyDiscord)
-    statusRoundRow = infoRow(homeLeft, 3, "Round State", "Waiting...", C.ACCENT)
-    timerRoundRow = infoRow(homeLeft, 4, "Time Remaining", "0:00", C.text)
-    murdererRow = infoRow(homeLeft, 5, "Murderer", "Undetected", C.bad)
-    sheriffRow = infoRow(homeLeft, 6, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
+    statusRoundRow = infoRow(homeLeft, 1, "Round State", "Waiting...", C.ACCENT)
+    timerRoundRow = infoRow(homeLeft, 2, "Time Remaining", "0:00", C.text)
+    murdererRow = infoRow(homeLeft, 3, "Murderer", "Undetected", C.bad)
+    sheriffRow = infoRow(homeLeft, 4, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
 
-    ctrls.RoundTimer = toggleRow(homeLeft, 7, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
-    ctrls.DeathNotifs = toggleRow(homeLeft, 8, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
-    ctrls.RoleReveals = toggleRow(homeLeft, 9, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
-    ctrls.AnnounceRoles = toggleRow(homeLeft, 10, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
+    ctrls.RoundTimer = toggleRow(homeLeft, 5, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
+    ctrls.DeathNotifs = toggleRow(homeLeft, 6, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
+    ctrls.RoleReveals = toggleRow(homeLeft, 7, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
+    ctrls.AnnounceRoles = toggleRow(homeLeft, 8, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
 
-    buttonRow(homeRight, 1, "SHOOT MURDERER", C.row, Actions.ShootMurderer)
-    buttonRow(homeRight, 2, "GRAB GUN", C.row, Actions.GrabGun)
-    buttonRow(homeRight, 3, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
-    buttonRow(homeRight, 4, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
-    buttonRow(homeRight, 5, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
-    buttonRow(homeRight, 6, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
-    buttonRow(homeRight, 7, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
+    infoRow(homeRight, 1, "Discord Invite", DISCORD_INVITE, C.ACCENT)
+    buttonRow(homeRight, 2, "COPY DISCORD INVITE", C.row, Actions.CopyDiscord)
+    buttonRow(homeRight, 3, "SHOOT MURDERER", C.row, Actions.ShootMurderer)
+    buttonRow(homeRight, 4, "GRAB GUN", C.row, Actions.GrabGun)
+    buttonRow(homeRight, 5, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
+    buttonRow(homeRight, 6, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
+    buttonRow(homeRight, 7, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
+    buttonRow(homeRight, 8, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
+    buttonRow(homeRight, 9, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
 
     -- 2. COMBAT TAB
     local combatTab = newTab("Combat", 2)
@@ -2373,7 +2236,7 @@ local function Main()
     ctrls.FlingStyle = dropdownRow(trollRight, 1, "Fling Style", {"Torque", "Velocity", "Orbit"}, Config.FlingStyle, function(v) Config.FlingStyle = v end)
     ctrls.FlingPower = sliderRow(trollRight, 2, "Fling Power", 20, 200, Config.FlingPower, "", function(v) Config.FlingPower = v end)
 
-    -- 8. MISC TAB
+    -- 8. MISC TAB (FLY TOGGLE REMOVED)
     local miscTab = newTab("Misc", 8)
     local miscLeft = column(miscTab, 0, 0.5, "MOVEMENT & ENVIRONMENT")
     local miscRight = column(miscTab, 0.5, 0.5, "PROTECTION & SERVER TOOLS")
@@ -2642,12 +2505,22 @@ local function Main()
             return
         end
         if processed then return end
+        if input.KeyCode == FLY_TOGGLE_KEY and not UIS:GetFocusedTextBox() then
+            if flying then
+                stopFly()
+                SendNotification("Fly", "Fly disabled", 2)
+            else
+                startFly()
+                SendNotification("Fly", "Fly enabled (Speed: " .. tostring(Config.FlySpeed) .. ")", 2)
+            end
+            return
+        end
         if input.KeyCode == Enum.KeyCode.End then
+            stopFly()
             Config.KillAura = false
             Config.AutoShoot = false
             Config.CoinFarm = false
             Config.AutoKill = false
-            stopSpiderFly()
             SyncUIWithConfig()
             SendNotification("Identical", "EMERGENCY STOP: Features halted.", 2)
             return
@@ -2660,11 +2533,11 @@ local function Main()
     end))
 
     showPage("Home")
-    setStatus("READY | RIGHT SHIFT: MENU")
+    setStatus("READY | RIGHT SHIFT: MENU | F: FLY")
     notify("DARK MOON V 1.2 Loaded!")
     print("DARK MOON V 1.2 LOADED | BY BIYXZND")
     print("DISCORD: " .. DISCORD_INVITE)
-    print("RIGHT SHIFT = MENU")
+    print("RIGHT SHIFT = MENU | F = FLY")
 
     -- RUNTIME LOOPS & ESP
     local function getOrCreateESP(id, adornee, text, color)
@@ -2860,7 +2733,7 @@ local function Main()
     end
 
     table.insert(activeConnections, RunService.Stepped:Connect(function()
-        if Config.AntiFling and not isFlinging and not spiderFlying then
+        if Config.AntiFling and not isFlinging then
             for _, p in ipairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and p.Character then
                     for _, part in ipairs(p.Character:GetChildren()) do
@@ -2888,11 +2761,11 @@ local function Main()
             local velMag = vel.Magnitude
             local angMag = angVel.Magnitude
 
-            if not isFlinging and not spiderFlying and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
+            if not flying and not isFlinging and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
                 lastSafePosition = root.CFrame
             end
 
-            if not isFlinging and not spiderFlying and (Config.AntiFling or Config.AntiVoid) and lastSafePosition then
+            if not flying and not isFlinging and (Config.AntiFling or Config.AntiVoid) and lastSafePosition then
                 if velMag > 120 or angMag > 90 then
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
@@ -3248,6 +3121,14 @@ local function Main()
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
             table.insert(activeConnections, p.CharacterAdded:Connect(function(c)
+                if STANDALONE_ESP_ENABLED then
+                    task.spawn(function()
+                        task.wait(0.25)
+                        if p.Character == c then
+                            applyStandalonePlayerEsp(p)
+                        end
+                    end)
+                end
                 local h = c:WaitForChild("Humanoid", 5)
                 if h then
                     h.Died:Connect(function()
@@ -3263,7 +3144,15 @@ local function Main()
     end
 
     table.insert(activeConnections, Players.PlayerAdded:Connect(function(p)
-        p.CharacterAdded:Connect(function(c)
+        table.insert(activeConnections, p.CharacterAdded:Connect(function(c)
+            if STANDALONE_ESP_ENABLED then
+                task.spawn(function()
+                    task.wait(0.25)
+                    if p.Character == c then
+                        applyStandalonePlayerEsp(p)
+                    end
+                end)
+            end
             local h = c:WaitForChild("Humanoid", 5)
             if h then
                 h.Died:Connect(function()
@@ -3274,7 +3163,15 @@ local function Main()
                     end
                 end)
             end
-        end)
+        end))
+    end))
+
+    table.insert(activeConnections, Players.PlayerRemoving:Connect(function(p)
+        clearStandalonePlayerEsp(p)
+    end))
+
+    table.insert(activeConnections, LocalPlayer.CharacterAdded:Connect(function()
+        stopFly()
     end))
 
     table.insert(activeConnections, LocalPlayer.Idled:Connect(function()
@@ -3285,8 +3182,13 @@ local function Main()
         end
     end))
 
+    refreshAllStandaloneEsp()
+
     getgenv().IdenticalMM2Unload = function()
-        pcall(stopSpiderFly)
+        stopFly()
+        for p in pairs(standaloneHighlights) do
+            clearStandalonePlayerEsp(p)
+        end
         for _, conn in ipairs(activeConnections) do
             pcall(function() conn:Disconnect() end)
         end
