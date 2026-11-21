@@ -36,6 +36,7 @@ local Config = {
 
     AutoShoot = false,
     SilentAim = false,
+    Wallbang = false,
     AimPrediction = true,
     PingComp = true,
     SingleShot = false,
@@ -525,6 +526,43 @@ local timerRoundRow = { SetValue = function(_) end, SetColor = function(_) end }
 local murdererRow = { SetValue = function(_) end, SetColor = function(_) end }
 local sheriffRow = { SetValue = function(_) end, SetColor = function(_) end }
 
+local function buildWallbangParams(targetChar)
+    local ignoreList = {}
+    if LocalPlayer.Character then
+        table.insert(ignoreList, LocalPlayer.Character)
+    end
+    local map = getActiveMap()
+    if map then
+        table.insert(ignoreList, map)
+    end
+    if targetChar then
+        table.insert(ignoreList, targetChar)
+    end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = ignoreList
+    params.IgnoreWater = true
+    return params
+end
+
+local function computeShotTargetCFrame(targetChar, rootPart)
+    local tRoot = getRootPart(targetChar)
+    if not tRoot then return nil end
+    local aimPart = targetChar:FindFirstChild("UpperTorso") or targetChar:FindFirstChild("Head") or tRoot
+    local aimPos = aimPart.Position
+    if Config.AimPrediction then
+        local lead = Config.PingComp and 0.16 or 0.12
+        aimPos = aimPos + (tRoot.AssemblyLinearVelocity * lead)
+    end
+    if Config.Wallbang and rootPart then
+        local dir = aimPos - rootPart.Position
+        if dir.Magnitude > 0.01 then
+            aimPos = aimPos + (dir.Unit * 0.15)
+        end
+    end
+    return CFrame.new(aimPos)
+end
+
 local Actions = {}
 
 function Actions.ShootMurderer()
@@ -555,13 +593,16 @@ function Actions.ShootMurderer()
     end
 
     local root = getRootPart(char)
-    local mRoot = getRootPart(murderer.Character)
-    if root and mRoot and gun:FindFirstChild("Shoot") then
+    local targetCF = computeShotTargetCFrame(murderer.Character, root)
+    if root and targetCF and gun:FindFirstChild("Shoot") then
         local rayAtt = root:FindFirstChild("GunRaycastAttachment")
         local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
-        local targetCF = CFrame.new(mRoot.Position)
-        gun.Shoot:FireServer(origin, targetCF)
-        SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")!", 2)
+        if Config.Wallbang then
+            gun.Shoot:FireServer(origin, targetCF, buildWallbangParams(murderer.Character))
+        else
+            gun.Shoot:FireServer(origin, targetCF)
+        end
+        SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")" .. (Config.Wallbang and " [Wallbang]" or "") .. "!", 2)
     end
 end
 
@@ -1131,23 +1172,19 @@ if hookmetamethod and getnamecallmethod then
         local method = getnamecallmethod()
 
         if silentAimHookActive and not checkcaller() and method == "FireServer" then
-            if self.Name == "KnifeThrown" and (Config.KnifeSilentAim or Config.SilentAim) then
+            if self.Name == "KnifeThrown" and (Config.KnifeSilentAim or Config.SilentAim or Config.Wallbang) then
                 local args = {...}
                 local target = getClosestKnifeTarget()
                 if target and target.Character then
-                    local tRoot = getRootPart(target.Character)
-                    if tRoot then
-                        local targetPos = tRoot.Position
-                        if Config.AimPrediction then
-                            local lead = Config.PingComp and 0.16 or 0.12
-                            targetPos = targetPos + (tRoot.AssemblyLinearVelocity * lead)
-                        end
-                        args[2] = CFrame.new(targetPos)
+                    local localRoot = getRootPart(LocalPlayer.Character)
+                    local targetCF = computeShotTargetCFrame(target.Character, localRoot)
+                    if targetCF then
+                        args[2] = targetCF
                         if setnamecallmethod then setnamecallmethod("FireServer") end
                         return oldNamecall(self, unpack(args))
                     end
                 end
-            elseif self.Name == "Shoot" and Config.SilentAim then
+            elseif self.Name == "Shoot" and (Config.SilentAim or Config.Wallbang) then
                 local args = {...}
                 local murderer = nil
                 for _, p in ipairs(Players:GetPlayers()) do
@@ -1157,14 +1194,13 @@ if hookmetamethod and getnamecallmethod then
                     end
                 end
                 if murderer and murderer.Character then
-                    local mRoot = getRootPart(murderer.Character)
-                    if mRoot then
-                        local targetPos = mRoot.Position
-                        if Config.AimPrediction then
-                            local lead = Config.PingComp and 0.16 or 0.12
-                            targetPos = targetPos + (mRoot.AssemblyLinearVelocity * lead)
+                    local localRoot = getRootPart(LocalPlayer.Character)
+                    local targetCF = computeShotTargetCFrame(murderer.Character, localRoot)
+                    if targetCF then
+                        args[2] = targetCF
+                        if Config.Wallbang and args[3] == nil then
+                            args[3] = buildWallbangParams(murderer.Character)
                         end
-                        args[2] = CFrame.new(targetPos)
                         if setnamecallmethod then setnamecallmethod("FireServer") end
                         return oldNamecall(self, unpack(args))
                     end
@@ -2218,14 +2254,15 @@ local function Main()
 
     ctrls.AutoShoot = toggleRow(combatLeft, 1, "Auto Shoot Murderer", "Fires revolver at Murderer", nil, function(v) Config.AutoShoot = v end, Config.AutoShoot)
     ctrls.SilentAim = toggleRow(combatLeft, 2, "Silent Aim", "Redirects gun/knife raycast to target", nil, function(v) Config.SilentAim = v end, Config.SilentAim)
-    ctrls.AimPrediction = toggleRow(combatLeft, 3, "Aim Prediction", "Compensates for target velocity", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
-    ctrls.PingComp = toggleRow(combatLeft, 4, "Ping Compensation", "Adjusts lead time for ping", nil, function(v) Config.PingComp = v end, Config.PingComp)
-    ctrls.SingleShot = toggleRow(combatLeft, 5, "Single Shot Lock", "Fires one verified shot then stops", nil, function(v) Config.SingleShot = v end, Config.SingleShot)
-    ctrls.AutoEquipGun = toggleRow(combatLeft, 6, "Auto Equip Gun", "Pulls out revolver when needed", nil, function(v) Config.AutoEquipGun = v end, Config.AutoEquipGun)
-    ctrls.GrabGunAuto = toggleRow(combatLeft, 7, "Full Gun Grabber", "Automatically picks up dropped gun", nil, function(v) Config.GrabGunAuto = v end, Config.GrabGunAuto)
-    ctrls.ShowFOV = toggleRow(combatLeft, 8, "Show FOV Circle", "Draws FOV circle on screen", nil, function(v) Config.ShowFOV = v end, Config.ShowFOV)
-    ctrls.FOVRadius = sliderRow(combatLeft, 9, "FOV Radius", 50, 700, Config.FOVRadius, " px", function(v) Config.FOVRadius = v end)
-    ctrls.GunGrabDist = sliderRow(combatLeft, 10, "Gun Grab Distance", 25, 600, Config.GunGrabDist, " studs", function(v) Config.GunGrabDist = v end)
+    ctrls.Wallbang = toggleRow(combatLeft, 3, "Wallbang", "Shoots through walls & obstacles", nil, function(v) Config.Wallbang = v end, Config.Wallbang)
+    ctrls.AimPrediction = toggleRow(combatLeft, 4, "Aim Prediction", "Compensates for target velocity", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
+    ctrls.PingComp = toggleRow(combatLeft, 5, "Ping Compensation", "Adjusts lead time for ping", nil, function(v) Config.PingComp = v end, Config.PingComp)
+    ctrls.SingleShot = toggleRow(combatLeft, 6, "Single Shot Lock", "Fires one verified shot then stops", nil, function(v) Config.SingleShot = v end, Config.SingleShot)
+    ctrls.AutoEquipGun = toggleRow(combatLeft, 7, "Auto Equip Gun", "Pulls out revolver when needed", nil, function(v) Config.AutoEquipGun = v end, Config.AutoEquipGun)
+    ctrls.GrabGunAuto = toggleRow(combatLeft, 8, "Full Gun Grabber", "Automatically picks up dropped gun", nil, function(v) Config.GrabGunAuto = v end, Config.GrabGunAuto)
+    ctrls.ShowFOV = toggleRow(combatLeft, 9, "Show FOV Circle", "Draws FOV circle on screen", nil, function(v) Config.ShowFOV = v end, Config.ShowFOV)
+    ctrls.FOVRadius = sliderRow(combatLeft, 10, "FOV Radius", 50, 700, Config.FOVRadius, " px", function(v) Config.FOVRadius = v end)
+    ctrls.GunGrabDist = sliderRow(combatLeft, 11, "Gun Grab Distance", 25, 600, Config.GunGrabDist, " studs", function(v) Config.GunGrabDist = v end)
 
     ctrls.KillAura = toggleRow(combatRight, 1, "Kill Aura", "Strikes players inside aura reach", nil, function(v) Config.KillAura = v end, Config.KillAura)
     ctrls.AutoKill = toggleRow(combatRight, 2, "Auto Kill Innocents", "Eliminates targets with knife", nil, function(v) Config.AutoKill = v end, Config.AutoKill)
@@ -3187,12 +3224,13 @@ local function Main()
                     end
                     local rayAtt = root:FindFirstChild("GunRaycastAttachment")
                     local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
-                    local aimPos = mRoot.Position
-                    if Config.AimPrediction then
-                        aimPos = aimPos + (mRoot.AssemblyLinearVelocity * 0.12)
-                    end
-                    if gun:FindFirstChild("Shoot") then
-                        gun.Shoot:FireServer(origin, CFrame.new(aimPos))
+                    local targetCF = computeShotTargetCFrame(murderer.Character, root)
+                    if targetCF and gun:FindFirstChild("Shoot") then
+                        if Config.Wallbang then
+                            gun.Shoot:FireServer(origin, targetCF, buildWallbangParams(murderer.Character))
+                        else
+                            gun.Shoot:FireServer(origin, targetCF)
+                        end
                         lastShootTick = now
                         if Config.SingleShot then
                             Config.AutoShoot = false
