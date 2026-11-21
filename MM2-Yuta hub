@@ -5,7 +5,7 @@
 -- By biyxznd
 -- Discord: https://discord.gg/QxRKp9wNeE
 
--- RIGHT SHIFT = Open / Close Menu | END = Emergency Stop | F = Toggle Fly
+-- RIGHT SHIFT = Open / Close Menu | END = Emergency Stop
 
 if getgenv and getgenv().IdenticalMM2Unload then
     pcall(getgenv().IdenticalMM2Unload)
@@ -99,8 +99,6 @@ local Config = {
     JumpValue = 50,
     InfiniteJump = false,
     Noclip = false,
-    Fly = false,
-    FlySpeed = 75,
 
     AntiVoid = true,
     AntiFling = true,
@@ -217,17 +215,11 @@ end
 
 local activeConnections = {}
 local trackedESPElements = {}
+local trackedTracers = {}
+local trackedBoxes = {}
 local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
-
--- Attached ESP & Fly State
-local FLY_TOGGLE_KEY = Enum.KeyCode.F
-local STANDALONE_ESP_ENABLED = true
-local STANDALONE_ESP_COLOR = Color3.fromRGB(211, 164, 232)
-local flying = false
-local bv, bg, flyConn
-local standaloneHighlights = {}
 
 local function fireTouch(part1, part2)
     if firetouchinterest and part1 and part2 then
@@ -240,12 +232,27 @@ local function fireTouch(part1, part2)
     end
 end
 
-local trackedTracers = {}
+local function clearBoxesCategory(prefix)
+    local toRemove = {}
+    for id in pairs(trackedBoxes) do
+        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
+            table.insert(toRemove, id)
+        end
+    end
+    for _, id in ipairs(toRemove) do
+        local boxData = trackedBoxes[id]
+        if boxData then
+            if boxData.outline then pcall(function() boxData.outline:Remove() end) end
+            if boxData.box then pcall(function() boxData.box:Remove() end) end
+            trackedBoxes[id] = nil
+        end
+    end
+end
 
 local function clearESPCategory(prefix)
     local toRemove = {}
     for id in pairs(trackedESPElements) do
-        if string.sub(id, 1, string.len(prefix)) == prefix then
+        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(toRemove, id)
         end
     end
@@ -257,7 +264,7 @@ local function clearESPCategory(prefix)
     end
     local tracersToRemove = {}
     for id in pairs(trackedTracers) do
-        if string.sub(id, 1, string.len(prefix)) == prefix then
+        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(tracersToRemove, id)
         end
     end
@@ -267,8 +274,9 @@ local function clearESPCategory(prefix)
             trackedTracers[id] = nil
         end
     end
+    clearBoxesCategory(prefix)
     for _, c in ipairs(espFolder:GetChildren()) do
-        if string.sub(c.Name, 1, string.len(prefix)) == prefix then
+        if prefix == "" or string.sub(c.Name, 1, string.len(prefix)) == prefix then
             pcall(function() c:Destroy() end)
         end
     end
@@ -282,139 +290,6 @@ end
 local function getHumanoid(char)
     if not char then return nil end
     return char:FindFirstChildOfClass("Humanoid")
-end
-
-local function getCharParts()
-    local char = LocalPlayer.Character
-    return char, char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function stopFly()
-    flying = false
-    Config.Fly = false
-    if flyConn then
-        flyConn:Disconnect()
-        flyConn = nil
-    end
-    if bv then
-        pcall(function() bv:Destroy() end)
-        bv = nil
-    end
-    if bg then
-        pcall(function() bg:Destroy() end)
-        bg = nil
-    end
-    local _, _, hum = getCharParts()
-    if hum then
-        hum.PlatformStand = false
-    end
-end
-
-local function startFly()
-    stopFly()
-    local _, root, hum = getCharParts()
-    if not root or not hum then return end
-
-    flying = true
-    Config.Fly = true
-    bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-    bv.P = 18000
-    bv.Velocity = Vector3.zero
-    bv.Parent = root
-
-    bg = Instance.new("BodyGyro")
-    bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-    bg.P = 14000
-    bg.CFrame = root.CFrame
-    bg.Parent = root
-
-    hum.PlatformStand = true
-
-    flyConn = RunService.RenderStepped:Connect(function(dt)
-        local curChar, curRoot, curHum = getCharParts()
-        if not flying or not curChar or not curRoot or not curRoot.Parent or not curHum then
-            stopFly()
-            return
-        end
-        if not bv or not bv.Parent or not bg or not bg.Parent then
-            stopFly()
-            return
-        end
-
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-
-        local moveDir = Vector3.zero
-        local verticalInput = 0
-
-        if not UserInputService:GetFocusedTextBox() then
-            local forward = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-            if forward.Magnitude > 1e-4 then forward = forward.Unit else forward = Vector3.new(0, 0, -1) end
-
-            local rightVec = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
-            if rightVec.Magnitude > 1e-4 then rightVec = rightVec.Unit else rightVec = Vector3.new(1, 0, 0) end
-
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += rightVec end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= rightVec end
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then verticalInput += 1 end
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then verticalInput -= 1 end
-        end
-
-        local stickDir = curHum.MoveDirection
-        if stickDir.Magnitude > 0.05 then
-            moveDir += Vector3.new(stickDir.X, 0, stickDir.Z)
-        end
-
-        if moveDir.Magnitude > 1 then
-            moveDir = moveDir.Unit
-        end
-
-        local flySpeed = tonumber(Config.FlySpeed) or 75
-        local targetVel = moveDir * flySpeed + Vector3.new(0, verticalInput * (flySpeed * 0.75), 0)
-        bv.Velocity = bv.Velocity:Lerp(targetVel, math.clamp((dt or 0.016) * 10, 0.1, 1))
-
-        local lookDir = moveDir.Magnitude > 0.05 and moveDir or Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-        if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, -1) else lookDir = lookDir.Unit end
-        bg.CFrame = CFrame.lookAt(curRoot.Position, curRoot.Position + lookDir)
-    end)
-end
-
-local function clearStandalonePlayerEsp(p)
-    if standaloneHighlights[p] then
-        pcall(function() standaloneHighlights[p]:Destroy() end)
-        standaloneHighlights[p] = nil
-    end
-end
-
-local function applyStandalonePlayerEsp(p)
-    if p == LocalPlayer or not STANDALONE_ESP_ENABLED or not p.Character then return end
-    clearStandalonePlayerEsp(p)
-
-    local hl = Instance.new("Highlight")
-    hl.Name = "StandaloneEspHighlight"
-    hl.FillColor = STANDALONE_ESP_COLOR
-    hl.FillTransparency = 0.6
-    hl.OutlineColor = Color3.new(1, 1, 1)
-    hl.OutlineTransparency = 0.15
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Adornee = p.Character
-    hl.Parent = p.Character
-    standaloneHighlights[p] = hl
-end
-
-local function refreshAllStandaloneEsp()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            if STANDALONE_ESP_ENABLED then
-                applyStandalonePlayerEsp(p)
-            else
-                clearStandalonePlayerEsp(p)
-            end
-        end
-    end
 end
 
 local function isPlayerAlive(p)
@@ -616,10 +491,10 @@ local Actions = {}
 
 function Actions.CopyDiscord()
     if setclipboard then
-        setclipboard(DISCORD_INVITE)
-        SendNotification("DARK MOON", "Discord invite copied: " .. DISCORD_INVITE, 3)
+        pcall(setclipboard, DISCORD_INVITE)
+        SendNotification("Discord", "Copied invite: " .. DISCORD_INVITE, 3)
     else
-        SendNotification("DARK MOON", DISCORD_INVITE, 4)
+        SendNotification("Discord", DISCORD_INVITE, 4)
     end
 end
 
@@ -737,7 +612,6 @@ function Actions.ReloadConfig()
 end
 
 function Actions.ResetDefaults()
-    stopFly()
     for k, v in pairs(DefaultConfig) do
         Config[k] = v
     end
@@ -2029,7 +1903,7 @@ local function Main()
         corner(row, 9)
 
         make("TextLabel", {
-            Size = UDim2.new(0.45, -14, 1, 0),
+            Size = UDim2.new(0.42, -14, 1, 0),
             Position = UDim2.fromOffset(14, 0),
             BackgroundTransparency = 1,
             Text = title,
@@ -2040,8 +1914,8 @@ local function Main()
         }, row)
 
         local valLbl = make("TextLabel", {
-            Size = UDim2.new(0.53, -14, 1, 0),
-            Position = UDim2.new(0.45, 0, 0, 0),
+            Size = UDim2.new(0.56, -14, 1, 0),
+            Position = UDim2.new(0.42, 0, 0, 0),
             BackgroundTransparency = 1,
             Text = tostring(initialValue or ""),
             Font = Enum.Font.GothamBold,
@@ -2078,30 +1952,30 @@ local function Main()
         return b
     end
 
-    -- 1. HOME TAB (WITH DISCORD INVITE)
+    -- 1. HOME TAB
     local homeTab = newTab("Home", 1)
-    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS & ROLES")
-    local homeRight = column(homeTab, 0.5, 0.5, "DISCORD, ACTIONS & CONFIG")
+    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS & DISCORD")
+    local homeRight = column(homeTab, 0.5, 0.5, "QUICK ACTIONS & CONFIG")
 
-    statusRoundRow = infoRow(homeLeft, 1, "Round State", "Waiting...", C.ACCENT)
-    timerRoundRow = infoRow(homeLeft, 2, "Time Remaining", "0:00", C.text)
-    murdererRow = infoRow(homeLeft, 3, "Murderer", "Undetected", C.bad)
-    sheriffRow = infoRow(homeLeft, 4, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
+    infoRow(homeLeft, 1, "Discord", DISCORD_INVITE, C.ACCENT)
+    buttonRow(homeLeft, 2, "COPY DISCORD INVITE", C.row, Actions.CopyDiscord)
+    statusRoundRow = infoRow(homeLeft, 3, "Round State", "Waiting...", C.ACCENT)
+    timerRoundRow = infoRow(homeLeft, 4, "Time Remaining", "0:00", C.text)
+    murdererRow = infoRow(homeLeft, 5, "Murderer", "Undetected", C.bad)
+    sheriffRow = infoRow(homeLeft, 6, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
 
-    ctrls.RoundTimer = toggleRow(homeLeft, 5, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
-    ctrls.DeathNotifs = toggleRow(homeLeft, 6, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
-    ctrls.RoleReveals = toggleRow(homeLeft, 7, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
-    ctrls.AnnounceRoles = toggleRow(homeLeft, 8, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
+    ctrls.RoundTimer = toggleRow(homeLeft, 7, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
+    ctrls.DeathNotifs = toggleRow(homeLeft, 8, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
+    ctrls.RoleReveals = toggleRow(homeLeft, 9, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
+    ctrls.AnnounceRoles = toggleRow(homeLeft, 10, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
 
-    infoRow(homeRight, 1, "Discord Invite", DISCORD_INVITE, C.ACCENT)
-    buttonRow(homeRight, 2, "COPY DISCORD INVITE", C.row, Actions.CopyDiscord)
-    buttonRow(homeRight, 3, "SHOOT MURDERER", C.row, Actions.ShootMurderer)
-    buttonRow(homeRight, 4, "GRAB GUN", C.row, Actions.GrabGun)
-    buttonRow(homeRight, 5, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
-    buttonRow(homeRight, 6, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
-    buttonRow(homeRight, 7, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
-    buttonRow(homeRight, 8, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
-    buttonRow(homeRight, 9, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
+    buttonRow(homeRight, 1, "SHOOT MURDERER", C.row, Actions.ShootMurderer)
+    buttonRow(homeRight, 2, "GRAB GUN", C.row, Actions.GrabGun)
+    buttonRow(homeRight, 3, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
+    buttonRow(homeRight, 4, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
+    buttonRow(homeRight, 5, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
+    buttonRow(homeRight, 6, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
+    buttonRow(homeRight, 7, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
 
     -- 2. COMBAT TAB
     local combatTab = newTab("Combat", 2)
@@ -2160,7 +2034,10 @@ local function Main()
         Config.ESPChams = v
         if not v then clearESPCategory("cham_") end
     end, Config.ESPChams)
-    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "Player Boxes", "Toggles player box ESP option", nil, function(v) Config.ESPBoxes = v end, Config.ESPBoxes)
+    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D ESP Box", "Draws 2D bounding boxes around players", nil, function(v)
+        Config.ESPBoxes = v
+        if not v then clearBoxesCategory("mm2_") end
+    end, Config.ESPBoxes)
     ctrls.ESPNames = toggleRow(visualsLeft, 4, "Role Tags & Names", "Shows role and player name", nil, function(v) Config.ESPNames = v end, Config.ESPNames)
     ctrls.ESPDistance = toggleRow(visualsLeft, 5, "Distance Labels", "Shows distance in studs", nil, function(v) Config.ESPDistance = v end, Config.ESPDistance)
     ctrls.ESPTracers = toggleRow(visualsLeft, 6, "Snapline Tracers", "Draws tracer lines to targets", nil, function(v)
@@ -2236,7 +2113,7 @@ local function Main()
     ctrls.FlingStyle = dropdownRow(trollRight, 1, "Fling Style", {"Torque", "Velocity", "Orbit"}, Config.FlingStyle, function(v) Config.FlingStyle = v end)
     ctrls.FlingPower = sliderRow(trollRight, 2, "Fling Power", 20, 200, Config.FlingPower, "", function(v) Config.FlingPower = v end)
 
-    -- 8. MISC TAB (FLY TOGGLE REMOVED)
+    -- 8. MISC TAB
     local miscTab = newTab("Misc", 8)
     local miscLeft = column(miscTab, 0, 0.5, "MOVEMENT & ENVIRONMENT")
     local miscRight = column(miscTab, 0.5, 0.5, "PROTECTION & SERVER TOOLS")
@@ -2247,19 +2124,18 @@ local function Main()
     ctrls.JumpValue = sliderRow(miscLeft, 4, "Jump Power", 50, 100, Config.JumpValue, "", function(v) Config.JumpValue = v end)
     ctrls.InfiniteJump = toggleRow(miscLeft, 5, "Infinite Jump", "Jump mid-air with Space", nil, function(v) Config.InfiniteJump = v end, Config.InfiniteJump)
     ctrls.Noclip = toggleRow(miscLeft, 6, "Noclip", "Walk through parts", nil, function(v) Config.Noclip = v end, Config.Noclip)
-    ctrls.FlySpeed = sliderRow(miscLeft, 7, "Fly Speed", 10, 100, Config.FlySpeed, "", function(v) Config.FlySpeed = v end)
-    ctrls.Fullbright = toggleRow(miscLeft, 8, "Fullbright", "Eliminates darkness", nil, function(v)
+    ctrls.Fullbright = toggleRow(miscLeft, 7, "Fullbright", "Eliminates darkness", nil, function(v)
         Config.Fullbright = v
         if not v then
             Lighting.Ambient = Color3.fromRGB(128, 128, 128)
             Lighting.Brightness = 1
         end
     end, Config.Fullbright)
-    ctrls.NoFog = toggleRow(miscLeft, 9, "Remove Fog", "Clears distance fog", nil, function(v)
+    ctrls.NoFog = toggleRow(miscLeft, 8, "Remove Fog", "Clears distance fog", nil, function(v)
         Config.NoFog = v
         if not v then Lighting.FogEnd = 1000 end
     end, Config.NoFog)
-    ctrls.DisableParticles = toggleRow(miscLeft, 10, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
+    ctrls.DisableParticles = toggleRow(miscLeft, 9, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
 
     ctrls.AntiFling = toggleRow(miscRight, 1, "Anti-Fling", "Blocks player collisions & flings", nil, function(v) Config.AntiFling = v end, Config.AntiFling)
     ctrls.AntiVoid = toggleRow(miscRight, 2, "Anti-Void", "Recovers when falling into void", nil, function(v) Config.AntiVoid = v end, Config.AntiVoid)
@@ -2505,18 +2381,7 @@ local function Main()
             return
         end
         if processed then return end
-        if input.KeyCode == FLY_TOGGLE_KEY and not UIS:GetFocusedTextBox() then
-            if flying then
-                stopFly()
-                SendNotification("Fly", "Fly disabled", 2)
-            else
-                startFly()
-                SendNotification("Fly", "Fly enabled (Speed: " .. tostring(Config.FlySpeed) .. ")", 2)
-            end
-            return
-        end
         if input.KeyCode == Enum.KeyCode.End then
-            stopFly()
             Config.KillAura = false
             Config.AutoShoot = false
             Config.CoinFarm = false
@@ -2533,11 +2398,11 @@ local function Main()
     end))
 
     showPage("Home")
-    setStatus("READY | RIGHT SHIFT: MENU | F: FLY")
+    setStatus("READY | RIGHT SHIFT: MENU")
     notify("DARK MOON V 1.2 Loaded!")
     print("DARK MOON V 1.2 LOADED | BY BIYXZND")
     print("DISCORD: " .. DISCORD_INVITE)
-    print("RIGHT SHIFT = MENU | F = FLY")
+    print("RIGHT SHIFT = MENU")
 
     -- RUNTIME LOOPS & ESP
     local function getOrCreateESP(id, adornee, text, color)
@@ -2591,6 +2456,118 @@ local function Main()
         hl.Adornee = targetChar
         hl.FillColor = color
         return hl
+    end
+
+    local function hideBox(id)
+        local boxData = trackedBoxes[id]
+        if boxData then
+            if boxData.box then boxData.box.Visible = false end
+            if boxData.outline then boxData.outline.Visible = false end
+        end
+    end
+
+    local function removeBox(id)
+        local boxData = trackedBoxes[id]
+        if boxData then
+            if boxData.outline then pcall(function() boxData.outline:Remove() end) end
+            if boxData.box then pcall(function() boxData.box:Remove() end) end
+            trackedBoxes[id] = nil
+        end
+    end
+
+    local function update2DBox(id, targetChar, rootPart, color)
+        if not Drawing or not Drawing.new then return end
+        if not Config.ESPBoxes or not targetChar or not rootPart or not Camera then
+            hideBox(id)
+            return
+        end
+
+        local cf, size = targetChar:GetBoundingBox()
+        if not cf or not size then
+            hideBox(id)
+            return
+        end
+
+        local halfX = size.X * 0.5
+        local halfY = size.Y * 0.5
+        local halfZ = size.Z * 0.5
+
+        local corners = {
+            cf * Vector3.new(-halfX, -halfY, -halfZ),
+            cf * Vector3.new(-halfX, -halfY, halfZ),
+            cf * Vector3.new(-halfX, halfY, -halfZ),
+            cf * Vector3.new(-halfX, halfY, halfZ),
+            cf * Vector3.new(halfX, -halfY, -halfZ),
+            cf * Vector3.new(halfX, -halfY, halfZ),
+            cf * Vector3.new(halfX, halfY, -halfZ),
+            cf * Vector3.new(halfX, halfY, halfZ)
+        }
+
+        local minX, minY = math.huge, math.huge
+        local maxX, maxY = -math.huge, -math.huge
+        local anyOnScreen = false
+
+        for _, cornerPos in ipairs(corners) do
+            local screenPos, onScreen = Camera:WorldToViewportPoint(cornerPos)
+            if screenPos.Z > 0 then
+                if onScreen then
+                    anyOnScreen = true
+                end
+                if screenPos.X < minX then minX = screenPos.X end
+                if screenPos.Y < minY then minY = screenPos.Y end
+                if screenPos.X > maxX then maxX = screenPos.X end
+                if screenPos.Y > maxY then maxY = screenPos.Y end
+            end
+        end
+
+        if not anyOnScreen or maxX <= minX or maxY <= minY then
+            hideBox(id)
+            return
+        end
+
+        local width = math.clamp(maxX - minX, 6, Camera.ViewportSize.X)
+        local height = math.clamp(maxY - minY, 10, Camera.ViewportSize.Y)
+        local pos = Vector2.new(minX, minY)
+        local boxSize = Vector2.new(width, height)
+
+        local boxData = trackedBoxes[id]
+        if not boxData then
+            local ok, created = pcall(function()
+                local outSq = Drawing.new("Square")
+                outSq.Thickness = 3
+                outSq.Filled = false
+                outSq.Color = Color3.new(0, 0, 0)
+                outSq.Transparency = 0.75
+                outSq.Visible = false
+
+                local sq = Drawing.new("Square")
+                sq.Thickness = 1.5
+                sq.Filled = false
+                sq.Color = color
+                sq.Transparency = 0.95
+                sq.Visible = false
+
+                return {outline = outSq, box = sq}
+            end)
+            if ok and created then
+                boxData = created
+                trackedBoxes[id] = boxData
+            else
+                return
+            end
+        end
+
+        if boxData.outline then
+            boxData.outline.Position = pos
+            boxData.outline.Size = boxSize
+            boxData.outline.Visible = true
+        end
+        if boxData.box then
+            boxData.box.Position = pos
+            boxData.box.Size = boxSize
+            boxData.box.Color = color
+            boxData.box.Visible = true
+        end
     end
 
     local function updateTracer(id, targetPos, color)
@@ -2761,11 +2738,11 @@ local function Main()
             local velMag = vel.Magnitude
             local angMag = angVel.Magnitude
 
-            if not flying and not isFlinging and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
+            if not isFlinging and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
                 lastSafePosition = root.CFrame
             end
 
-            if not flying and not isFlinging and (Config.AntiFling or Config.AntiVoid) and lastSafePosition then
+            if not isFlinging and (Config.AntiFling or Config.AntiVoid) and lastSafePosition then
                 if velMag > 120 or angMag > 90 then
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
@@ -2841,6 +2818,7 @@ local function Main()
 
         if Config.RoleESP and root then
             for _, p in ipairs(Players:GetPlayers()) do
+                local id = "mm2_" .. p.UserId
                 if p ~= LocalPlayer and p.Character and isPlayerAlive(p) then
                     local pRoot = getRootPart(p.Character)
                     if pRoot then
@@ -2862,25 +2840,37 @@ local function Main()
                                 text = text .. " (" .. dist .. "s)"
                             end
 
-                            getOrCreateESP("mm2_" .. p.UserId, pRoot, text, col)
+                            getOrCreateESP(id, pRoot, text, col)
                             if Config.ESPChams then
                                 getOrCreateCham(p.UserId, p.Character, col)
                             end
-                            updateTracer("mm2_" .. p.UserId, pRoot.Position, col)
+                            if Config.ESPBoxes then
+                                update2DBox(id, p.Character, pRoot, col)
+                            else
+                                hideBox(id)
+                            end
+                            updateTracer(id, pRoot.Position, col)
+                        else
+                            hideBox(id)
                         end
+                    else
+                        hideBox(id)
                     end
                 else
-                    if trackedESPElements["mm2_" .. p.UserId] then
-                        trackedESPElements["mm2_" .. p.UserId]:Destroy()
-                        trackedESPElements["mm2_" .. p.UserId] = nil
+                    if trackedESPElements[id] then
+                        trackedESPElements[id]:Destroy()
+                        trackedESPElements[id] = nil
                     end
                     if trackedESPElements["cham_" .. p.UserId] then
                         trackedESPElements["cham_" .. p.UserId]:Destroy()
                         trackedESPElements["cham_" .. p.UserId] = nil
                     end
-                    removeTracer("mm2_" .. p.UserId)
+                    removeBox(id)
+                    removeTracer(id)
                 end
             end
+        else
+            clearBoxesCategory("mm2_")
         end
 
         if Config.GunESP and root then
@@ -3121,14 +3111,6 @@ local function Main()
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
             table.insert(activeConnections, p.CharacterAdded:Connect(function(c)
-                if STANDALONE_ESP_ENABLED then
-                    task.spawn(function()
-                        task.wait(0.25)
-                        if p.Character == c then
-                            applyStandalonePlayerEsp(p)
-                        end
-                    end)
-                end
                 local h = c:WaitForChild("Humanoid", 5)
                 if h then
                     h.Died:Connect(function()
@@ -3144,15 +3126,7 @@ local function Main()
     end
 
     table.insert(activeConnections, Players.PlayerAdded:Connect(function(p)
-        table.insert(activeConnections, p.CharacterAdded:Connect(function(c)
-            if STANDALONE_ESP_ENABLED then
-                task.spawn(function()
-                    task.wait(0.25)
-                    if p.Character == c then
-                        applyStandalonePlayerEsp(p)
-                    end
-                end)
-            end
+        p.CharacterAdded:Connect(function(c)
             local h = c:WaitForChild("Humanoid", 5)
             if h then
                 h.Died:Connect(function()
@@ -3163,15 +3137,7 @@ local function Main()
                     end
                 end)
             end
-        end))
-    end))
-
-    table.insert(activeConnections, Players.PlayerRemoving:Connect(function(p)
-        clearStandalonePlayerEsp(p)
-    end))
-
-    table.insert(activeConnections, LocalPlayer.CharacterAdded:Connect(function()
-        stopFly()
+        end)
     end))
 
     table.insert(activeConnections, LocalPlayer.Idled:Connect(function()
@@ -3182,13 +3148,7 @@ local function Main()
         end
     end))
 
-    refreshAllStandaloneEsp()
-
     getgenv().IdenticalMM2Unload = function()
-        stopFly()
-        for p in pairs(standaloneHighlights) do
-            clearStandalonePlayerEsp(p)
-        end
         for _, conn in ipairs(activeConnections) do
             pcall(function() conn:Disconnect() end)
         end
