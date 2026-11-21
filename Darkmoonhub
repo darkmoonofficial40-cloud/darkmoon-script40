@@ -86,8 +86,8 @@ local Config = {
     QuickFarm = false,
     CoinBagCap = 40,
 
-    FlingStyle = "Torque",
-    FlingPower = 90,
+    FlingStyle = "Orbit",
+    FlingPower = 110,
 
     AutoDrop = false,
     SaveSlot1 = nil,
@@ -304,17 +304,49 @@ local function isPlayerAlive(p)
     return hum ~= nil and hum.Health > 0
 end
 
+local function hasRoleTool(container, roleKind)
+    if not container then return false end
+    for _, item in ipairs(container:GetChildren()) do
+        if item:IsA("Tool") or item:IsA("Folder") then
+            local lname = string.lower(item.Name)
+            if roleKind == "Murderer" then
+                if item.Name == "Knife" or string.find(lname, "knife", 1, true) or string.find(lname, "blade", 1, true) or item:FindFirstChild("KnifeScript") or item:FindFirstChild("KnifeLocal") then
+                    return true
+                end
+            elseif roleKind == "Sheriff" then
+                if item.Name == "Gun" or string.find(lname, "gun", 1, true) or string.find(lname, "revolver", 1, true) or string.find(lname, "pistol", 1, true) or item:FindFirstChild("GunScript") or item:FindFirstChild("GunLocal") then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
 local function getPlayerRole(p)
     if not p then return "Innocent" end
+
+    local attrRole = p:GetAttribute("Role") or (p.Character and p.Character:GetAttribute("Role"))
+    if type(attrRole) == "string" then
+        local lrole = string.lower(attrRole)
+        if string.find(lrole, "murd", 1, true) then
+            return "Murderer"
+        elseif string.find(lrole, "sher", 1, true) or string.find(lrole, "hero", 1, true) then
+            return "Sheriff"
+        end
+    end
+
     local bp = p:FindFirstChild("Backpack")
     local char = p.Character
-    local knife = (bp and bp:FindFirstChild("Knife")) or (char and char:FindFirstChild("Knife"))
-    local gun = (bp and bp:FindFirstChild("Gun")) or (char and char:FindFirstChild("Gun"))
-    if knife then
+    local starterGear = p:FindFirstChild("StarterGear")
+
+    if hasRoleTool(bp, "Murderer") or hasRoleTool(char, "Murderer") or hasRoleTool(starterGear, "Murderer") then
         return "Murderer"
-    elseif gun then
+    end
+    if hasRoleTool(bp, "Sheriff") or hasRoleTool(char, "Sheriff") or hasRoleTool(starterGear, "Sheriff") then
         return "Sheriff"
     end
+
     return "Innocent"
 end
 
@@ -736,6 +768,7 @@ function Actions.TeleportLocation2()
     end
 end
 
+-- FLING V2 ENGINE
 local function flingCharacter(targetChar)
     if isFlinging then return end
     local char = LocalPlayer.Character
@@ -749,9 +782,10 @@ local function flingCharacter(targetChar)
 
     isFlinging = true
     local oldCF = root.CFrame
-    local power = math.max(tonumber(Config.FlingPower) or 90, 20)
-    local spinVel = math.max(power * 240, 25000)
-    local impulseMag = math.max(power * 95, 8500)
+    local oldState = hum:GetState()
+    local power = math.max(tonumber(Config.FlingPower) or 110, 25)
+    local spinVel = math.max(power * 320, 40000)
+    local launchMag = math.max(power * 135, 14000)
 
     if sethiddenproperty then
         pcall(sethiddenproperty, LocalPlayer, "SimulationRadius", math.huge)
@@ -762,36 +796,51 @@ local function flingCharacter(targetChar)
     end
 
     for _, obj in ipairs(root:GetChildren()) do
-        if obj:IsA("BodyMover") then
-            pcall(function() obj:Destroy() end)
+        if obj:IsA("BodyMover") or obj:IsA("Constraint") then
+            if obj.Name == "FlingTorque" or obj.Name == "FlingVelocity" or obj.Name == "FlingAlignPos" then
+                pcall(function() obj:Destroy() end)
+            end
         end
     end
 
+    pcall(function()
+        hum:ChangeState(Enum.HumanoidStateType.Physics)
+    end)
+
     local bAV = Instance.new("BodyAngularVelocity")
     bAV.Name = "FlingTorque"
-    bAV.AngularVelocity = Vector3.new(spinVel, spinVel * 1.5, spinVel)
+    bAV.AngularVelocity = Vector3.new(spinVel * 0.85, spinVel * 1.85, spinVel * 0.85)
     bAV.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
     bAV.P = 1e9
     bAV.Parent = root
 
     local bV = Instance.new("BodyVelocity")
     bV.Name = "FlingVelocity"
-    bV.Velocity = Vector3.new(0, impulseMag * 0.65, 0)
+    bV.Velocity = Vector3.new(0, launchMag * 0.8, 0)
     bV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bV.P = 1e8
+    bV.P = 1e9
     bV.Parent = root
 
     local steppedConn = RunService.Stepped:Connect(function()
-        if not char or not char.Parent then return end
-        for _, child in ipairs(char:GetDescendants()) do
-            if child:IsA("BasePart") then
-                child.CanCollide = false
+        if char and char.Parent then
+            for _, child in ipairs(char:GetDescendants()) do
+                if child:IsA("BasePart") then
+                    child.CanCollide = false
+                    child.Massless = true
+                end
+            end
+        end
+        if targetChar and targetChar.Parent then
+            for _, tChild in ipairs(targetChar:GetDescendants()) do
+                if tChild:IsA("BasePart") then
+                    tChild.CanCollide = false
+                end
             end
         end
     end)
 
     local startTime = tick()
-    local duration = 1.65
+    local duration = 1.85
 
     while tick() - startTime < duration do
         if not targetChar or not targetChar.Parent or not tRoot or not tRoot.Parent or tHum.Health <= 0 then
@@ -804,43 +853,46 @@ local function flingCharacter(targetChar)
         local elapsed = tick() - startTime
         local style = Config.FlingStyle
         local targetVel = tRoot.AssemblyLinearVelocity or Vector3.zero
-        local leadPos = tRoot.Position + (targetVel * 0.14)
+        local leadPos = tRoot.Position + (targetVel * 0.18)
 
         if style == "Velocity" then
-            root.CFrame = CFrame.new(leadPos + Vector3.new(0, 0.4, 0))
+            local surgeX = math.sin(elapsed * 42) * launchMag
+            local surgeZ = math.cos(elapsed * 42) * launchMag
+            local surgeY = launchMag * (0.9 + 0.35 * math.sin(elapsed * 24))
+            root.CFrame = CFrame.new(leadPos + Vector3.new(0, 0.25, 0))
+            bV.Velocity = Vector3.new(surgeX, surgeY, surgeZ)
+            root.AssemblyLinearVelocity = bV.Velocity
+            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.4, spinVel)
+        elseif style == "Torque" then
+            local snap = Vector3.new(
+                math.sin(elapsed * 55) * 0.55,
+                math.cos(elapsed * 48) * 0.4,
+                math.cos(elapsed * 55) * 0.55
+            )
+            root.CFrame = CFrame.new(leadPos + snap) * CFrame.Angles(elapsed * 22, elapsed * 34, elapsed * 18)
             bV.Velocity = Vector3.new(
-                math.sin(elapsed * 35) * impulseMag,
-                impulseMag,
-                math.cos(elapsed * 35) * impulseMag
+                math.cos(elapsed * 38) * launchMag * 0.95,
+                launchMag * 1.05,
+                math.sin(elapsed * 38) * launchMag * 0.95
             )
             root.AssemblyLinearVelocity = bV.Velocity
-            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel, spinVel)
-        elseif style == "Orbit" then
-            local angle = elapsed * 28
-            local radius = 1.15
-            local off = Vector3.new(math.cos(angle) * radius, math.sin(elapsed * 18) * 0.8, math.sin(angle) * radius)
-            root.CFrame = CFrame.new(leadPos + off, leadPos)
-            bV.Velocity = Vector3.new(
-                math.cos(angle) * impulseMag,
-                impulseMag * 0.85,
-                math.sin(angle) * impulseMag
-            )
-            root.AssemblyLinearVelocity = bV.Velocity
-            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.35, spinVel)
+            root.AssemblyAngularVelocity = Vector3.new(spinVel * 1.2, spinVel * 2.0, spinVel * 1.2)
         else
-            local jitter = Vector3.new(
-                math.sin(elapsed * 45) * 0.45,
-                math.cos(elapsed * 40) * 0.35,
-                math.cos(elapsed * 45) * 0.45
+            local angle = elapsed * 34
+            local radius = 1.35
+            local orbitOffset = Vector3.new(
+                math.cos(angle) * radius,
+                math.sin(elapsed * 22) * 0.9,
+                math.sin(angle) * radius
             )
-            root.CFrame = CFrame.new(leadPos + jitter) * CFrame.Angles(0, elapsed * 25, 0)
+            root.CFrame = CFrame.new(leadPos + orbitOffset, leadPos)
             bV.Velocity = Vector3.new(
-                math.cos(elapsed * 32) * impulseMag * 0.85,
-                impulseMag,
-                math.sin(elapsed * 32) * impulseMag * 0.85
+                math.cos(angle) * launchMag * 1.1,
+                launchMag,
+                math.sin(angle) * launchMag * 1.1
             )
             root.AssemblyLinearVelocity = bV.Velocity
-            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.5, spinVel)
+            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.75, spinVel)
         end
 
         RunService.Heartbeat:Wait()
@@ -855,8 +907,20 @@ local function flingCharacter(targetChar)
         root.AssemblyAngularVelocity = Vector3.zero
         root.CFrame = oldCF
     end
+    if char and char.Parent then
+        for _, child in ipairs(char:GetDescendants()) do
+            if child:IsA("BasePart") then
+                child.Massless = false
+            end
+        end
+    end
+    if hum and hum.Parent and hum.Health > 0 then
+        pcall(function()
+            hum:ChangeState(oldState or Enum.HumanoidStateType.GettingUp)
+        end)
+    end
 
-    task.wait(0.15)
+    task.wait(0.12)
     isFlinging = false
 end
 
@@ -869,10 +933,10 @@ function Actions.FlingMurderer()
         end
     end
     if murderer and murderer.Character then
-        SendNotification("Identical", "Flinging Murderer (" .. murderer.Name .. ")...", 2)
+        SendNotification("Fling V2", "Flinging Murderer (" .. murderer.Name .. ")...", 2)
         task.spawn(flingCharacter, murderer.Character)
     else
-        SendNotification("Identical", "Murderer not found or dead.", 2)
+        SendNotification("Fling V2", "Murderer not found or dead.", 2)
     end
 end
 
@@ -885,24 +949,24 @@ function Actions.FlingSheriff()
         end
     end
     if sheriff and sheriff.Character then
-        SendNotification("Identical", "Flinging Sheriff (" .. sheriff.Name .. ")...", 2)
+        SendNotification("Fling V2", "Flinging Sheriff (" .. sheriff.Name .. ")...", 2)
         task.spawn(flingCharacter, sheriff.Character)
     else
-        SendNotification("Identical", "Sheriff not found or dead.", 2)
+        SendNotification("Fling V2", "Sheriff not found or dead.", 2)
     end
 end
 
 function Actions.FlingSelectedPlayer()
     if not selectedFlingPlayerName or selectedFlingPlayerName == "None" then
-        SendNotification("Identical", "Select a player from the Fling Player List first.", 2)
+        SendNotification("Fling V2", "Select a player from the Fling Player List first.", 2)
         return
     end
     local targetPlayer = Players:FindFirstChild(selectedFlingPlayerName)
     if targetPlayer and targetPlayer ~= LocalPlayer and targetPlayer.Character and isPlayerAlive(targetPlayer) then
-        SendNotification("Identical", "Flinging " .. targetPlayer.Name .. "...", 2)
+        SendNotification("Fling V2", "Flinging " .. targetPlayer.Name .. "...", 2)
         task.spawn(flingCharacter, targetPlayer.Character)
     else
-        SendNotification("Identical", "Selected player not found or dead.", 2)
+        SendNotification("Fling V2", "Selected player not found or dead.", 2)
         RefreshFlingPlayerList()
     end
 end
@@ -2205,7 +2269,7 @@ local function Main()
         Config.ESPChams = v
         if not v then clearESPCategory("cham_") end
     end, Config.ESPChams)
-    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D Box ESP", "Draws 2D boxes with name & range tag", nil, function(v)
+    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D Box ESP", "Smooth moving 2D box + name & range", nil, function(v)
         Config.ESPBoxes = v
         if not v then clear2DBoxESP() end
     end, Config.ESPBoxes)
@@ -2275,8 +2339,8 @@ local function Main()
 
     -- 7. TROLLING TAB
     local trollTab = newTab("Trolling", 7)
-    local trollLeft = column(trollTab, 0, 0.5, "FLING TARGETS")
-    local trollRight = column(trollTab, 0.5, 0.5, "FLING SETTINGS")
+    local trollLeft = column(trollTab, 0, 0.5, "FLING V2 TARGETS")
+    local trollRight = column(trollTab, 0.5, 0.5, "FLING V2 SETTINGS")
 
     buttonRow(trollLeft, 1, "FLING MURDERER", C.row, Actions.FlingMurderer)
     buttonRow(trollLeft, 2, "FLING SHERIFF", C.row, Actions.FlingSheriff)
@@ -2288,7 +2352,7 @@ local function Main()
     buttonRow(trollLeft, 4, "FLING SELECTED PLAYER", C.row, Actions.FlingSelectedPlayer)
     buttonRow(trollLeft, 5, "REFRESH PLAYER LIST", C.row, function()
         RefreshFlingPlayerList()
-        SendNotification("Identical", "Refreshed fling player list.", 2)
+        SendNotification("Fling V2", "Refreshed fling player list.", 2)
     end)
 
     RefreshFlingPlayerList = function()
@@ -2309,8 +2373,8 @@ local function Main()
     table.insert(activeConnections, Players.PlayerAdded:Connect(RefreshFlingPlayerList))
     table.insert(activeConnections, Players.PlayerRemoving:Connect(RefreshFlingPlayerList))
 
-    ctrls.FlingStyle = dropdownRow(trollRight, 1, "Fling Style", {"Torque", "Velocity", "Orbit"}, Config.FlingStyle, function(v) Config.FlingStyle = v end)
-    ctrls.FlingPower = sliderRow(trollRight, 2, "Fling Power", 20, 200, Config.FlingPower, "", function(v) Config.FlingPower = v end)
+    ctrls.FlingStyle = dropdownRow(trollRight, 1, "Fling Style", {"Orbit", "Velocity", "Torque"}, Config.FlingStyle, function(v) Config.FlingStyle = v end)
+    ctrls.FlingPower = sliderRow(trollRight, 2, "Fling Power", 25, 220, Config.FlingPower, "", function(v) Config.FlingPower = v end)
 
     -- 8. MISC TAB
     local miscTab = newTab("Misc", 8)
@@ -2664,19 +2728,38 @@ local function Main()
         return hl
     end
 
-    local function getCharacterBounds(char)
-        if not char then return nil, nil end
-        local ok, cf, size = pcall(function()
-            return char:GetBoundingBox()
-        end)
-        if ok and cf and size and size.Magnitude > 0.1 then
-            return cf, size
-        end
+    local function getCharacterScreenBox(char)
+        if not char then return nil end
         local root = getRootPart(char)
-        if root then
-            return root.CFrame, Vector3.new(4, 5.4, 2)
+        if not root then return nil end
+        local head = char:FindFirstChild("Head")
+        local topWorld = head and (head.Position + Vector3.new(0, head.Size.Y * 0.5 + 0.45, 0)) or (root.Position + Vector3.new(0, 2.75, 0))
+        local bottomWorld = root.Position - Vector3.new(0, 3.1, 0)
+
+        local topScreen, topVis = Camera:WorldToViewportPoint(topWorld)
+        local botScreen, botVis = Camera:WorldToViewportPoint(bottomWorld)
+        if topScreen.Z <= 0 and botScreen.Z <= 0 then
+            return nil
         end
-        return nil, nil
+        if not topVis and not botVis then
+            return nil
+        end
+
+        local height = math.abs(botScreen.Y - topScreen.Y)
+        if height < 10 or height > 2000 then
+            return nil
+        end
+
+        local width = math.clamp(height * 0.56, 8, 900)
+        local centerX = (topScreen.X + botScreen.X) * 0.5
+        local topY = math.min(topScreen.Y, botScreen.Y)
+
+        return {
+            x = centerX - (width * 0.5),
+            y = topY,
+            w = width,
+            h = height
+        }
     end
 
     local function update2DBoxESP(userId, char, labelText, color, inRange)
@@ -2689,14 +2772,14 @@ local function Main()
                 outlineSq.Thickness = 3
                 outlineSq.Filled = false
                 outlineSq.Color = Color3.fromRGB(10, 8, 12)
-                outlineSq.Transparency = 0.72
+                outlineSq.Transparency = 0.75
                 outlineSq.Visible = false
 
                 local boxSq = Drawing.new("Square")
-                boxSq.Thickness = 1.4
+                boxSq.Thickness = 1.5
                 boxSq.Filled = false
                 boxSq.Color = color
-                boxSq.Transparency = 0.95
+                boxSq.Transparency = 0.96
                 boxSq.Visible = false
 
                 local nameTag = Drawing.new("Text")
@@ -2708,7 +2791,12 @@ local function Main()
                 nameTag.Transparency = 0.98
                 nameTag.Visible = false
 
-                return {outline = outlineSq, box = boxSq, tag = nameTag}
+                return {
+                    outline = outlineSq,
+                    box = boxSq,
+                    tag = nameTag,
+                    smooth = nil
+                }
             end)
             if not ok or not created then return end
             entry = created
@@ -2719,55 +2807,36 @@ local function Main()
             entry.outline.Visible = false
             entry.box.Visible = false
             entry.tag.Visible = false
+            entry.smooth = nil
             return
         end
 
-        local cf, size = getCharacterBounds(char)
-        if not cf or not size then
+        local targetRect = getCharacterScreenBox(char)
+        if not targetRect then
             entry.outline.Visible = false
             entry.box.Visible = false
             entry.tag.Visible = false
+            entry.smooth = nil
             return
         end
 
-        local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
-        local corners = {
-            cf * Vector3.new(-hx, -hy, -hz),
-            cf * Vector3.new(-hx, -hy, hz),
-            cf * Vector3.new(-hx, hy, -hz),
-            cf * Vector3.new(-hx, hy, hz),
-            cf * Vector3.new(hx, -hy, -hz),
-            cf * Vector3.new(hx, -hy, hz),
-            cf * Vector3.new(hx, hy, -hz),
-            cf * Vector3.new(hx, hy, hz)
-        }
-
-        local minX, minY = math.huge, math.huge
-        local maxX, maxY = -math.huge, -math.huge
-        local anyVisible = false
-
-        for _, cornerPos in ipairs(corners) do
-            local screenPos, onScreen = Camera:WorldToViewportPoint(cornerPos)
-            if onScreen and screenPos.Z > 0 then
-                anyVisible = true
-                if screenPos.X < minX then minX = screenPos.X end
-                if screenPos.Y < minY then minY = screenPos.Y end
-                if screenPos.X > maxX then maxX = screenPos.X end
-                if screenPos.Y > maxY then maxY = screenPos.Y end
-            end
+        if not entry.smooth then
+            entry.smooth = {
+                x = targetRect.x,
+                y = targetRect.y,
+                w = targetRect.w,
+                h = targetRect.h
+            }
+        else
+            local alpha = 0.42
+            entry.smooth.x = entry.smooth.x + (targetRect.x - entry.smooth.x) * alpha
+            entry.smooth.y = entry.smooth.y + (targetRect.y - entry.smooth.y) * alpha
+            entry.smooth.w = entry.smooth.w + (targetRect.w - entry.smooth.w) * alpha
+            entry.smooth.h = entry.smooth.h + (targetRect.h - entry.smooth.h) * alpha
         end
 
-        local boxW = maxX - minX
-        local boxH = maxY - minY
-        if not anyVisible or boxW < 4 or boxH < 8 then
-            entry.outline.Visible = false
-            entry.box.Visible = false
-            entry.tag.Visible = false
-            return
-        end
-
-        local topLeft = Vector2.new(math.floor(minX), math.floor(minY))
-        local boxSize = Vector2.new(math.floor(boxW), math.floor(boxH))
+        local topLeft = Vector2.new(math.floor(entry.smooth.x), math.floor(entry.smooth.y))
+        local boxSize = Vector2.new(math.floor(entry.smooth.w), math.floor(entry.smooth.h))
 
         entry.outline.Position = topLeft
         entry.outline.Size = boxSize
@@ -2781,7 +2850,7 @@ local function Main()
         if labelText and labelText ~= "" then
             entry.tag.Text = labelText
             entry.tag.Color = color
-            entry.tag.Position = Vector2.new(math.floor(minX + boxW * 0.5), math.floor(minY - 16))
+            entry.tag.Position = Vector2.new(math.floor(entry.smooth.x + entry.smooth.w * 0.5), math.floor(entry.smooth.y - 16))
             entry.tag.Visible = true
         else
             entry.tag.Visible = false
