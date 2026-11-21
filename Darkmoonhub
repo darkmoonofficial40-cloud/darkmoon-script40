@@ -35,7 +35,6 @@ local Config = {
     AnnounceRoles = false,
 
     AutoShoot = false,
-    Wallbang = false,
     SilentAim = false,
     AimPrediction = true,
     PingComp = true,
@@ -473,47 +472,6 @@ local function computePredictedAimPos(targetPart, fallbackRoot)
     return pos
 end
 
-local function hasLineOfSight(originPos, targetPos, ignoreInstances)
-    if not originPos or not targetPos then return true end
-    local delta = targetPos - originPos
-    if delta.Magnitude <= 0.01 then return true end
-
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local filterList = {}
-    if LocalPlayer and LocalPlayer.Character then
-        table.insert(filterList, LocalPlayer.Character)
-    end
-    if espFolder then
-        table.insert(filterList, espFolder)
-    end
-    if ignoreInstances then
-        for _, inst in ipairs(ignoreInstances) do
-            if inst then
-                table.insert(filterList, inst)
-            end
-        end
-    end
-    params.FilterDescendantsInstances = filterList
-
-    local ok, result = pcall(function()
-        return Workspace:Raycast(originPos, delta, params)
-    end)
-    if not ok then
-        return true
-    end
-    if not result then
-        return true
-    end
-
-    local hitPart = result.Instance
-    if hitPart and (hitPart.Transparency >= 0.95 or not hitPart.CanCollide) then
-        return true
-    end
-
-    return false
-end
-
 local function fireGunAtTarget(gun, root, targetChar)
     if not gun or not root or not targetChar then return false end
     local shootRemote = getGunShootRemote(gun)
@@ -530,10 +488,6 @@ local function fireGunAtTarget(gun, root, targetChar)
     local originCF = (rayAtt and rayAtt.WorldCFrame)
         or (handle and handle:IsA("BasePart") and handle.CFrame)
         or root.CFrame
-
-    if not Config.Wallbang and not hasLineOfSight(originCF.Position, aimPos, {targetChar, gun}) then
-        return false
-    end
 
     local ok = false
     if shootRemote:IsA("RemoteEvent") then
@@ -1403,14 +1357,6 @@ local function getBestGunTarget()
         end
     end
     if murderer and murderer.Character then
-        local char = LocalPlayer.Character
-        local root = char and getRootPart(char)
-        local tAim = getAimPart(murderer.Character) or getRootPart(murderer.Character)
-        if not Config.Wallbang and root and tAim then
-            if not hasLineOfSight(root.Position, tAim.Position, {murderer.Character}) then
-                return nil
-            end
-        end
         return murderer
     end
     return getClosestKnifeTarget()
@@ -1451,7 +1397,7 @@ if hookmetamethod and getnamecallmethod then
                         return oldNamecall(self, unpack(args))
                     end
                 end
-            elseif isGunShootRemote and (Config.SilentAim or Config.Wallbang) then
+            elseif isGunShootRemote and Config.SilentAim then
                 local args = {...}
                 local target = getBestGunTarget()
                 if target and target.Character then
@@ -2522,16 +2468,15 @@ local function Main()
     local combatRight = column(combatTab, 0.5, 0.5, "MURDERER, KNIFE & HITBOX")
 
     ctrls.AutoShoot = toggleRow(combatLeft, 1, "Auto Shoot Murderer", "Fires revolver at Murderer", nil, function(v) Config.AutoShoot = v end, Config.AutoShoot)
-    ctrls.Wallbang = toggleRow(combatLeft, 2, "Wallbang", "Fires through walls and obstacles", nil, function(v) Config.Wallbang = v end, Config.Wallbang)
-    ctrls.SilentAim = toggleRow(combatLeft, 3, "Silent Aim", "Redirects gun/knife raycast to target", nil, function(v) Config.SilentAim = v end, Config.SilentAim)
-    ctrls.AimPrediction = toggleRow(combatLeft, 4, "Aim Prediction", "Compensates for target velocity", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
-    ctrls.PingComp = toggleRow(combatLeft, 5, "Ping Compensation", "Adjusts lead time for ping", nil, function(v) Config.PingComp = v end, Config.PingComp)
-    ctrls.SingleShot = toggleRow(combatLeft, 6, "Single Shot Lock", "Fires one verified shot then stops", nil, function(v) Config.SingleShot = v end, Config.SingleShot)
-    ctrls.AutoEquipGun = toggleRow(combatLeft, 7, "Auto Equip Gun", "Pulls out revolver when needed", nil, function(v) Config.AutoEquipGun = v end, Config.AutoEquipGun)
-    ctrls.GrabGunAuto = toggleRow(combatLeft, 8, "Full Gun Grabber", "Automatically picks up dropped gun", nil, function(v) Config.GrabGunAuto = v end, Config.GrabGunAuto)
-    ctrls.ShowFOV = toggleRow(combatLeft, 9, "Show FOV Circle", "Draws FOV circle on screen", nil, function(v) Config.ShowFOV = v end, Config.ShowFOV)
-    ctrls.FOVRadius = sliderRow(combatLeft, 10, "FOV Radius", 50, 700, Config.FOVRadius, " px", function(v) Config.FOVRadius = v end)
-    ctrls.GunGrabDist = sliderRow(combatLeft, 11, "Gun Grab Distance", 25, 600, Config.GunGrabDist, " studs", function(v) Config.GunGrabDist = v end)
+    ctrls.SilentAim = toggleRow(combatLeft, 2, "Silent Aim", "Redirects gun/knife raycast to target", nil, function(v) Config.SilentAim = v end, Config.SilentAim)
+    ctrls.AimPrediction = toggleRow(combatLeft, 3, "Aim Prediction", "Compensates for target velocity", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
+    ctrls.PingComp = toggleRow(combatLeft, 4, "Ping Compensation", "Adjusts lead time for ping", nil, function(v) Config.PingComp = v end, Config.PingComp)
+    ctrls.SingleShot = toggleRow(combatLeft, 5, "Single Shot Lock", "Fires one verified shot then stops", nil, function(v) Config.SingleShot = v end, Config.SingleShot)
+    ctrls.AutoEquipGun = toggleRow(combatLeft, 6, "Auto Equip Gun", "Pulls out revolver when needed", nil, function(v) Config.AutoEquipGun = v end, Config.AutoEquipGun)
+    ctrls.GrabGunAuto = toggleRow(combatLeft, 7, "Full Gun Grabber", "Automatically picks up dropped gun", nil, function(v) Config.GrabGunAuto = v end, Config.GrabGunAuto)
+    ctrls.ShowFOV = toggleRow(combatLeft, 8, "Show FOV Circle", "Draws FOV circle on screen", nil, function(v) Config.ShowFOV = v end, Config.ShowFOV)
+    ctrls.FOVRadius = sliderRow(combatLeft, 9, "FOV Radius", 50, 700, Config.FOVRadius, " px", function(v) Config.FOVRadius = v end)
+    ctrls.GunGrabDist = sliderRow(combatLeft, 10, "Gun Grab Distance", 25, 600, Config.GunGrabDist, " studs", function(v) Config.GunGrabDist = v end)
 
     ctrls.KillAura = toggleRow(combatRight, 1, "Kill Aura", "Strikes players inside aura reach", nil, function(v) Config.KillAura = v end, Config.KillAura)
     ctrls.AutoKill = toggleRow(combatRight, 2, "Auto Kill Innocents", "Eliminates targets with knife", nil, function(v) Config.AutoKill = v end, Config.AutoKill)
