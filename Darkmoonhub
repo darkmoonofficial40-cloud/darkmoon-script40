@@ -215,6 +215,8 @@ end
 
 local activeConnections = {}
 local trackedESPElements = {}
+local trackedTracers = {}
+local trackedBoxESP = {}
 local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
@@ -231,7 +233,25 @@ local function fireTouch(part1, part2)
     end
 end
 
-local trackedTracers = {}
+local function removeBoxESPForId(userId)
+    local entry = trackedBoxESP[userId]
+    if entry then
+        if entry.outline then pcall(function() entry.outline:Remove() end) end
+        if entry.box then pcall(function() entry.box:Remove() end) end
+        if entry.tag then pcall(function() entry.tag:Remove() end) end
+        trackedBoxESP[userId] = nil
+    end
+end
+
+local function clear2DBoxESP()
+    local ids = {}
+    for id in pairs(trackedBoxESP) do
+        table.insert(ids, id)
+    end
+    for _, id in ipairs(ids) do
+        removeBoxESPForId(id)
+    end
+end
 
 local function clearESPCategory(prefix)
     local toRemove = {}
@@ -262,6 +282,9 @@ local function clearESPCategory(prefix)
         if string.sub(c.Name, 1, string.len(prefix)) == prefix then
             pcall(function() c:Destroy() end)
         end
+    end
+    if prefix == "" or prefix == "mm2_" then
+        clear2DBoxESP()
     end
 end
 
@@ -2182,7 +2205,10 @@ local function Main()
         Config.ESPChams = v
         if not v then clearESPCategory("cham_") end
     end, Config.ESPChams)
-    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "Player Boxes", "Toggles player box ESP option", nil, function(v) Config.ESPBoxes = v end, Config.ESPBoxes)
+    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D Box ESP", "Draws 2D boxes with name & range tag", nil, function(v)
+        Config.ESPBoxes = v
+        if not v then clear2DBoxESP() end
+    end, Config.ESPBoxes)
     ctrls.ESPNames = toggleRow(visualsLeft, 4, "Role Tags & Names", "Shows role and player name", nil, function(v) Config.ESPNames = v end, Config.ESPNames)
     ctrls.ESPDistance = toggleRow(visualsLeft, 5, "Distance Labels", "Shows distance in studs", nil, function(v) Config.ESPDistance = v end, Config.ESPDistance)
     ctrls.ESPTracers = toggleRow(visualsLeft, 6, "Snapline Tracers", "Draws tracer lines to targets", nil, function(v)
@@ -2638,6 +2664,130 @@ local function Main()
         return hl
     end
 
+    local function getCharacterBounds(char)
+        if not char then return nil, nil end
+        local ok, cf, size = pcall(function()
+            return char:GetBoundingBox()
+        end)
+        if ok and cf and size and size.Magnitude > 0.1 then
+            return cf, size
+        end
+        local root = getRootPart(char)
+        if root then
+            return root.CFrame, Vector3.new(4, 5.4, 2)
+        end
+        return nil, nil
+    end
+
+    local function update2DBoxESP(userId, char, labelText, color, inRange)
+        if not Drawing or not Drawing.new then return end
+
+        local entry = trackedBoxESP[userId]
+        if not entry then
+            local ok, created = pcall(function()
+                local outlineSq = Drawing.new("Square")
+                outlineSq.Thickness = 3
+                outlineSq.Filled = false
+                outlineSq.Color = Color3.fromRGB(10, 8, 12)
+                outlineSq.Transparency = 0.72
+                outlineSq.Visible = false
+
+                local boxSq = Drawing.new("Square")
+                boxSq.Thickness = 1.4
+                boxSq.Filled = false
+                boxSq.Color = color
+                boxSq.Transparency = 0.95
+                boxSq.Visible = false
+
+                local nameTag = Drawing.new("Text")
+                nameTag.Size = 13
+                nameTag.Center = true
+                nameTag.Outline = true
+                nameTag.OutlineColor = Color3.fromRGB(12, 9, 15)
+                nameTag.Color = color
+                nameTag.Transparency = 0.98
+                nameTag.Visible = false
+
+                return {outline = outlineSq, box = boxSq, tag = nameTag}
+            end)
+            if not ok or not created then return end
+            entry = created
+            trackedBoxESP[userId] = entry
+        end
+
+        if not inRange or not char then
+            entry.outline.Visible = false
+            entry.box.Visible = false
+            entry.tag.Visible = false
+            return
+        end
+
+        local cf, size = getCharacterBounds(char)
+        if not cf or not size then
+            entry.outline.Visible = false
+            entry.box.Visible = false
+            entry.tag.Visible = false
+            return
+        end
+
+        local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
+        local corners = {
+            cf * Vector3.new(-hx, -hy, -hz),
+            cf * Vector3.new(-hx, -hy, hz),
+            cf * Vector3.new(-hx, hy, -hz),
+            cf * Vector3.new(-hx, hy, hz),
+            cf * Vector3.new(hx, -hy, -hz),
+            cf * Vector3.new(hx, -hy, hz),
+            cf * Vector3.new(hx, hy, -hz),
+            cf * Vector3.new(hx, hy, hz)
+        }
+
+        local minX, minY = math.huge, math.huge
+        local maxX, maxY = -math.huge, -math.huge
+        local anyVisible = false
+
+        for _, cornerPos in ipairs(corners) do
+            local screenPos, onScreen = Camera:WorldToViewportPoint(cornerPos)
+            if onScreen and screenPos.Z > 0 then
+                anyVisible = true
+                if screenPos.X < minX then minX = screenPos.X end
+                if screenPos.Y < minY then minY = screenPos.Y end
+                if screenPos.X > maxX then maxX = screenPos.X end
+                if screenPos.Y > maxY then maxY = screenPos.Y end
+            end
+        end
+
+        local boxW = maxX - minX
+        local boxH = maxY - minY
+        if not anyVisible or boxW < 4 or boxH < 8 then
+            entry.outline.Visible = false
+            entry.box.Visible = false
+            entry.tag.Visible = false
+            return
+        end
+
+        local topLeft = Vector2.new(math.floor(minX), math.floor(minY))
+        local boxSize = Vector2.new(math.floor(boxW), math.floor(boxH))
+
+        entry.outline.Position = topLeft
+        entry.outline.Size = boxSize
+        entry.outline.Visible = true
+
+        entry.box.Position = topLeft
+        entry.box.Size = boxSize
+        entry.box.Color = color
+        entry.box.Visible = true
+
+        if labelText and labelText ~= "" then
+            entry.tag.Text = labelText
+            entry.tag.Color = color
+            entry.tag.Position = Vector2.new(math.floor(minX + boxW * 0.5), math.floor(minY - 16))
+            entry.tag.Visible = true
+        else
+            entry.tag.Visible = false
+        end
+    end
+
     local function updateTracer(id, targetPos, color)
         if not Drawing or not Drawing.new then return end
         local line = trackedTracers[id]
@@ -2890,28 +3040,54 @@ local function Main()
                     local pRoot = getRootPart(p.Character)
                     if pRoot then
                         local dist = math.floor((root.Position - pRoot.Position).Magnitude)
-                        if dist <= Config.ESPDistanceMax then
-                            local role = getPlayerRole(p)
-                            local col = Colors.AccentGreen
-                            if role == "Murderer" then
-                                col = Colors.AccentRed
-                            elseif role == "Sheriff" then
-                                col = Colors.AccentBlue
-                            end
+                        local role = getPlayerRole(p)
+                        local col = Colors.AccentGreen
+                        if role == "Murderer" then
+                            col = Colors.AccentRed
+                        elseif role == "Sheriff" then
+                            col = Colors.AccentBlue
+                        end
 
-                            local text = p.Name
-                            if Config.ESPNames then
-                                text = "[" .. role .. "] " .. p.Name
-                            end
-                            if Config.ESPDistance then
-                                text = text .. " (" .. dist .. "s)"
-                            end
+                        local inRange = dist <= Config.ESPDistanceMax
+                        local text = p.Name
+                        if Config.ESPNames then
+                            text = "[" .. role .. "] " .. p.Name
+                        end
+                        if Config.ESPDistance then
+                            text = text .. " (" .. dist .. "s)"
+                        end
 
+                        if inRange then
                             getOrCreateESP("mm2_" .. p.UserId, pRoot, text, col)
                             if Config.ESPChams then
                                 getOrCreateCham(p.UserId, p.Character, col)
                             end
                             updateTracer("mm2_" .. p.UserId, pRoot.Position, col)
+                        else
+                            if trackedESPElements["mm2_" .. p.UserId] then
+                                trackedESPElements["mm2_" .. p.UserId]:Destroy()
+                                trackedESPElements["mm2_" .. p.UserId] = nil
+                            end
+                            if trackedESPElements["cham_" .. p.UserId] then
+                                trackedESPElements["cham_" .. p.UserId]:Destroy()
+                                trackedESPElements["cham_" .. p.UserId] = nil
+                            end
+                            removeTracer("mm2_" .. p.UserId)
+                        end
+
+                        if Config.ESPBoxes then
+                            local boxLabelParts = {}
+                            if Config.ESPNames then
+                                table.insert(boxLabelParts, "[" .. role .. "] " .. p.Name)
+                            else
+                                table.insert(boxLabelParts, p.Name)
+                            end
+                            if Config.ESPDistance then
+                                table.insert(boxLabelParts, dist .. "s")
+                            end
+                            update2DBoxESP(p.UserId, p.Character, table.concat(boxLabelParts, " · "), col, inRange)
+                        else
+                            removeBoxESPForId(p.UserId)
                         end
                     end
                 else
@@ -2924,8 +3100,11 @@ local function Main()
                         trackedESPElements["cham_" .. p.UserId] = nil
                     end
                     removeTracer("mm2_" .. p.UserId)
+                    removeBoxESPForId(p.UserId)
                 end
             end
+        else
+            clear2DBoxESP()
         end
 
         if Config.GunESP and root then
@@ -3169,6 +3348,7 @@ local function Main()
                 local h = c:WaitForChild("Humanoid", 5)
                 if h then
                     h.Died:Connect(function()
+                        removeBoxESPForId(p.UserId)
                         table.insert(deadPlayersList, p.Name)
                         if Config.DeathNotifs then
                             local r = getPlayerRole(p)
@@ -3185,6 +3365,7 @@ local function Main()
             local h = c:WaitForChild("Humanoid", 5)
             if h then
                 h.Died:Connect(function()
+                    removeBoxESPForId(p.UserId)
                     table.insert(deadPlayersList, p.Name)
                     if Config.DeathNotifs then
                         local r = getPlayerRole(p)
@@ -3193,6 +3374,10 @@ local function Main()
                 end)
             end
         end)
+    end))
+
+    table.insert(activeConnections, Players.PlayerRemoving:Connect(function(p)
+        removeBoxESPForId(p.UserId)
     end))
 
     table.insert(activeConnections, LocalPlayer.Idled:Connect(function()
@@ -3209,6 +3394,7 @@ local function Main()
         end
         activeConnections = {}
         clearESPCategory("")
+        clear2DBoxESP()
         for id in pairs(trackedTracers) do
             pcall(function() trackedTracers[id]:Remove() end)
         end
