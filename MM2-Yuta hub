@@ -11,8 +11,8 @@ pcall(function()
 end)
 local player = Players.LocalPlayer
 pcall(function()
-	if _G.kynoxUnload then pcall(_G.kynoxUnload) end
-	if _G.kynoxUnload then pcall(_G.kynoxUnload) end
+	if _G.YutahubUnload then pcall(_G.YutahubUnload) end
+	if _G.YutahubUnload then pcall(_G.YutahubUnload) end
 	if _G.RockHubUnload then pcall(_G.RockHubUnload) end
 
 	local containers = {}
@@ -35,7 +35,7 @@ pcall(function()
 	end)
 
 	for _, parent in ipairs(containers) do
-		for _, name in ipairs({ "kynox", "sqmon", "RockHub" }) do
+		for _, name in ipairs({ "Yutahub", "sqmon", "RockHub" }) do
 			for _, child in ipairs(parent:GetChildren()) do
 				if child.Name == name and child:IsA("ScreenGui") then
 					pcall(child.Destroy, child)
@@ -46,7 +46,7 @@ pcall(function()
 	pcall(function()
 		local Lighting = game:GetService("Lighting")
 		for _, child in ipairs(Lighting:GetChildren()) do
-			if string.find(child.Name, "kynox") or string.find(child.Name, "sqmon") then
+			if string.find(child.Name, "Yutahub") or string.find(child.Name, "sqmon") then
 				pcall(child.Destroy, child)
 			end
 		end
@@ -676,9 +676,9 @@ connect(workspace:GetPropertyChangedSignal("CurrentCamera"), bindViewport)
 connect(gui:GetPropertyChangedSignal("AbsoluteSize"), updateResponsiveScale)
 bindViewport()
 local topBar = create("Frame", { Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1, Parent = main })
-local logoAsset = resolveCustomAsset("nobackroundkynox.png") or resolveCustomAsset("kynox.png") or resolveCustomAsset("logo.png")
+local logoAsset = resolveCustomAsset("nobackroundYutahub.png") or resolveCustomAsset("Yutahub.png") or resolveCustomAsset("logo.png")
 local logoImg = create("ImageLabel", {
-	Name = "KynoxLogo",
+	Name = "YutahubLogo",
 	BackgroundTransparency = 1,
 	Position = UDim2.fromOffset(12, 8),
 	Size = UDim2.fromOffset(22, 22),
@@ -13963,12 +13963,12 @@ return (function(...)
 			end
 			pcall(function() blur:Destroy() end)
 			gui:Destroy()
-			_G.kynoxUnload = nil
-			_G.kynoxUnload = nil
+			_G.YutahubUnload = nil
+			_G.YutahubUnload = nil
 			_G.RockHubUnload = nil
 		end
-		_G.kynoxUnload = _G.RockHubUnload
-		_G.kynoxUnload = _G.RockHubUnload
+		_G.YutahubUnload = _G.RockHubUnload
+		_G.YutahubUnload = _G.RockHubUnload
 
 		local TextService2 = game:GetService("TextService")
 
