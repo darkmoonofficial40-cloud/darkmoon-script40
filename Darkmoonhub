@@ -99,7 +99,6 @@ local Config = {
     JumpValue = 50,
     InfiniteJump = false,
     Noclip = false,
-    FlySpeed = 35,
 
     AntiVoid = true,
     AntiFling = true,
@@ -1170,18 +1169,18 @@ local function Main()
 
     local toggleButton = make("TextButton", {
         Name = "ToggleButton",
-        Size = UDim2.fromOffset(62, 62),
-        Position = UDim2.new(0, 18, 0.5, -31),
+        Size = UDim2.fromOffset(40, 40),
+        Position = UDim2.new(0, 14, 0.5, -20),
         BackgroundColor3 = C.ACCENT,
         Text = "",
         AutoButtonColor = false,
         BorderSizePixel = 0,
         ZIndex = 10
     }, gui)
-    corner(toggleButton, 31)
+    corner(toggleButton, 20)
     make("UIStroke", {
         Color = Color3.fromRGB(255, 245, 255),
-        Thickness = 1.6,
+        Thickness = 1.2,
         Transparency = 0.25
     }, toggleButton)
 
@@ -1197,11 +1196,11 @@ local function Main()
     local toggleShadow = make("TextLabel", {
         Name = "ToggleShadow",
         Size = UDim2.fromScale(1, 1),
-        Position = UDim2.fromOffset(2, 4),
+        Position = UDim2.fromOffset(1.5, 2.5),
         BackgroundTransparency = 1,
         Text = "D",
         Font = Enum.Font.GothamBlack,
-        TextSize = 34,
+        TextSize = 22,
         TextColor3 = Color3.fromRGB(64, 30, 88),
         TextXAlignment = Enum.TextXAlignment.Center,
         TextYAlignment = Enum.TextYAlignment.Center,
@@ -1212,11 +1211,11 @@ local function Main()
     local toggleLetter = make("TextLabel", {
         Name = "ToggleLetter",
         Size = UDim2.fromScale(1, 1),
-        Position = UDim2.fromOffset(0, -1),
+        Position = UDim2.fromOffset(0, -0.5),
         BackgroundTransparency = 1,
         Text = "D",
         Font = Enum.Font.GothamBlack,
-        TextSize = 34,
+        TextSize = 22,
         TextColor3 = Color3.fromRGB(255, 252, 255),
         TextStrokeColor3 = Color3.fromRGB(134, 78, 168),
         TextStrokeTransparency = 0.25,
@@ -2298,19 +2297,18 @@ local function Main()
     ctrls.JumpValue = sliderRow(miscLeft, 4, "Jump Power", 50, 100, Config.JumpValue, "", function(v) Config.JumpValue = v end)
     ctrls.InfiniteJump = toggleRow(miscLeft, 5, "Infinite Jump", "Jump mid-air with Space", nil, function(v) Config.InfiniteJump = v end, Config.InfiniteJump)
     ctrls.Noclip = toggleRow(miscLeft, 6, "Noclip", "Walk through parts", nil, function(v) Config.Noclip = v end, Config.Noclip)
-    ctrls.FlySpeed = sliderRow(miscLeft, 7, "Fly Speed", 10, 100, Config.FlySpeed, "", function(v) Config.FlySpeed = v end)
-    ctrls.Fullbright = toggleRow(miscLeft, 8, "Fullbright", "Eliminates darkness", nil, function(v)
+    ctrls.Fullbright = toggleRow(miscLeft, 7, "Fullbright", "Eliminates darkness", nil, function(v)
         Config.Fullbright = v
         if not v then
             Lighting.Ambient = Color3.fromRGB(128, 128, 128)
             Lighting.Brightness = 1
         end
     end, Config.Fullbright)
-    ctrls.NoFog = toggleRow(miscLeft, 9, "Remove Fog", "Clears distance fog", nil, function(v)
+    ctrls.NoFog = toggleRow(miscLeft, 8, "Remove Fog", "Clears distance fog", nil, function(v)
         Config.NoFog = v
         if not v then Lighting.FogEnd = 1000 end
     end, Config.NoFog)
-    ctrls.DisableParticles = toggleRow(miscLeft, 10, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
+    ctrls.DisableParticles = toggleRow(miscLeft, 9, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
 
     ctrls.AntiFling = toggleRow(miscRight, 1, "Anti-Fling", "Blocks player collisions & flings", nil, function(v) Config.AntiFling = v end, Config.AntiFling)
     ctrls.AntiVoid = toggleRow(miscRight, 2, "Anti-Void", "Recovers when falling into void", nil, function(v) Config.AntiVoid = v end, Config.AntiVoid)
