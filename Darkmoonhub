@@ -219,6 +219,7 @@ local trackedESPElements = {}
 local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
+local selectedFlingPlayerName = nil
 
 local function fireTouch(part1, part2)
     if firetouchinterest and part1 and part2 then
@@ -453,6 +454,7 @@ end
 -- Forward UI & Action references
 local isSyncingUI = false
 local SyncUIWithConfig = function() end
+local RefreshFlingPlayerList = function() end
 local ctrls = {}
 
 local SendNotification = function(title, text, duration)
@@ -809,7 +811,7 @@ local function flingCharacter(targetChar)
                 math.cos(elapsed * 40) * 0.35,
                 math.cos(elapsed * 45) * 0.45
             )
-            root.CFrame = CFrame.new(leadPos + jitter) * CFrame.Angles(angle or 0, elapsed * 25, 0)
+            root.CFrame = CFrame.new(leadPos + jitter) * CFrame.Angles(0, elapsed * 25, 0)
             bV.Velocity = Vector3.new(
                 math.cos(elapsed * 32) * impulseMag * 0.85,
                 impulseMag,
@@ -865,6 +867,21 @@ function Actions.FlingSheriff()
         task.spawn(flingCharacter, sheriff.Character)
     else
         SendNotification("Identical", "Sheriff not found or dead.", 2)
+    end
+end
+
+function Actions.FlingSelectedPlayer()
+    if not selectedFlingPlayerName or selectedFlingPlayerName == "None" then
+        SendNotification("Identical", "Select a player from the Fling Player List first.", 2)
+        return
+    end
+    local targetPlayer = Players:FindFirstChild(selectedFlingPlayerName)
+    if targetPlayer and targetPlayer ~= LocalPlayer and targetPlayer.Character and isPlayerAlive(targetPlayer) then
+        SendNotification("Identical", "Flinging " .. targetPlayer.Name .. "...", 2)
+        task.spawn(flingCharacter, targetPlayer.Character)
+    else
+        SendNotification("Identical", "Selected player not found or dead.", 2)
+        RefreshFlingPlayerList()
     end
 end
 
@@ -1153,19 +1170,61 @@ local function Main()
 
     local toggleButton = make("TextButton", {
         Name = "ToggleButton",
-        Size = UDim2.fromOffset(46, 46),
-        Position = UDim2.new(0, 16, 0.5, -23),
-        BackgroundColor3 = C.row,
-        Text = "D",
-        Font = Enum.Font.GothamBlack,
-        TextSize = 18,
-        TextColor3 = C.ACCENT,
+        Size = UDim2.fromOffset(62, 62),
+        Position = UDim2.new(0, 18, 0.5, -31),
+        BackgroundColor3 = C.ACCENT,
+        Text = "",
         AutoButtonColor = false,
         BorderSizePixel = 0,
         ZIndex = 10
     }, gui)
-    corner(toggleButton, 23)
-    outline(toggleButton)
+    corner(toggleButton, 31)
+    make("UIStroke", {
+        Color = Color3.fromRGB(255, 245, 255),
+        Thickness = 1.6,
+        Transparency = 0.25
+    }, toggleButton)
+
+    local toggleGradient = make("UIGradient", {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(235, 196, 252)),
+            ColorSequenceKeypoint.new(0.55, C.ACCENT),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(122, 76, 156))
+        }),
+        Rotation = 45
+    }, toggleButton)
+
+    local toggleShadow = make("TextLabel", {
+        Name = "ToggleShadow",
+        Size = UDim2.fromScale(1, 1),
+        Position = UDim2.fromOffset(2, 4),
+        BackgroundTransparency = 1,
+        Text = "D",
+        Font = Enum.Font.GothamBlack,
+        TextSize = 34,
+        TextColor3 = Color3.fromRGB(64, 30, 88),
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        Rotation = -10,
+        ZIndex = 11
+    }, toggleButton)
+
+    local toggleLetter = make("TextLabel", {
+        Name = "ToggleLetter",
+        Size = UDim2.fromScale(1, 1),
+        Position = UDim2.fromOffset(0, -1),
+        BackgroundTransparency = 1,
+        Text = "D",
+        Font = Enum.Font.GothamBlack,
+        TextSize = 34,
+        TextColor3 = Color3.fromRGB(255, 252, 255),
+        TextStrokeColor3 = Color3.fromRGB(134, 78, 168),
+        TextStrokeTransparency = 0.25,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        Rotation = -10,
+        ZIndex = 12
+    }, toggleButton)
 
     local scale = make("UIScale", {Scale = 1}, window)
     local baseScale = 1
@@ -1563,19 +1622,22 @@ local function Main()
 
     local function showPage(name)
         activePage = name
-        local q = searchBox.Text:lower():match("^%s*(.-)%s*$")
-        if q ~= "" then
-            searchBox.Text = ""
-            return
-        end
-
-        for n, p in pairs(pages) do p.Visible = (n == name) end
 
         for n, t in pairs(tabs) do
             local active = n == name
             t.btn.BackgroundColor3 = active and C.row or C.side
             t.btn.TextColor3 = active and C.text or C.sub
             t.bar.Visible = active
+        end
+
+        local q = searchBox.Text:lower():match("^%s*(.-)%s*$")
+        if q ~= "" then
+            applySearchFilter()
+            return
+        end
+
+        for n, p in pairs(pages) do
+            p.Visible = (n == name)
         end
     end
 
@@ -1899,10 +1961,18 @@ local function Main()
             TextXAlignment = Enum.TextXAlignment.Left
         }, row)
 
-        local selected = defaultOption
+        local currentOptions = {}
+        for i, o in ipairs(options or {}) do
+            currentOptions[i] = o
+        end
+        if #currentOptions == 0 then
+            currentOptions = {"None"}
+        end
+
+        local selected = defaultOption or currentOptions[1]
         local optIndex = 1
-        for i, o in ipairs(options) do
-            if o == defaultOption then
+        for i, o in ipairs(currentOptions) do
+            if o == selected then
                 optIndex = i
                 break
             end
@@ -1924,7 +1994,7 @@ local function Main()
 
         local function setSelected(opt, silent)
             selected = opt
-            for i, o in ipairs(options) do
+            for i, o in ipairs(currentOptions) do
                 if o == opt then
                     optIndex = i
                     break
@@ -1937,10 +2007,30 @@ local function Main()
             end
         end
 
+        local function setOptions(newOpts, preferred)
+            currentOptions = {}
+            for i, o in ipairs(newOpts or {}) do
+                currentOptions[i] = o
+            end
+            if #currentOptions == 0 then
+                currentOptions = {"None"}
+            end
+            local nextSel = currentOptions[1]
+            if preferred then
+                for _, o in ipairs(currentOptions) do
+                    if o == preferred then
+                        nextSel = preferred
+                        break
+                    end
+                end
+            end
+            setSelected(nextSel, true)
+        end
+
         dropBtn.MouseButton1Click:Connect(function()
             optIndex = optIndex + 1
-            if optIndex > #options then optIndex = 1 end
-            setSelected(options[optIndex], false)
+            if optIndex > #currentOptions then optIndex = 1 end
+            setSelected(currentOptions[optIndex], false)
         end)
 
         registerSearchable(row, getPageName(col), {title, tostring(defaultOption)})
@@ -1948,7 +2038,8 @@ local function Main()
         return {
             Row = row,
             SetSelected = function(opt) setSelected(opt, false) end,
-            GetSelected = function() return selected end
+            GetSelected = function() return selected end,
+            SetOptions = setOptions
         }
     end
 
@@ -2165,6 +2256,34 @@ local function Main()
     buttonRow(trollLeft, 1, "FLING MURDERER", C.row, Actions.FlingMurderer)
     buttonRow(trollLeft, 2, "FLING SHERIFF", C.row, Actions.FlingSheriff)
 
+    local flingPlayerDropdown = dropdownRow(trollLeft, 3, "Fling Player List", {"None"}, "None", function(v)
+        selectedFlingPlayerName = v
+    end)
+
+    buttonRow(trollLeft, 4, "FLING SELECTED PLAYER", C.row, Actions.FlingSelectedPlayer)
+    buttonRow(trollLeft, 5, "REFRESH PLAYER LIST", C.row, function()
+        RefreshFlingPlayerList()
+        SendNotification("Identical", "Refreshed fling player list.", 2)
+    end)
+
+    RefreshFlingPlayerList = function()
+        local names = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                table.insert(names, p.Name)
+            end
+        end
+        if #names == 0 then
+            names = {"None"}
+        end
+        flingPlayerDropdown.SetOptions(names, selectedFlingPlayerName)
+        selectedFlingPlayerName = flingPlayerDropdown.GetSelected()
+    end
+
+    RefreshFlingPlayerList()
+    table.insert(activeConnections, Players.PlayerAdded:Connect(RefreshFlingPlayerList))
+    table.insert(activeConnections, Players.PlayerRemoving:Connect(RefreshFlingPlayerList))
+
     ctrls.FlingStyle = dropdownRow(trollRight, 1, "Fling Style", {"Torque", "Velocity", "Orbit"}, Config.FlingStyle, function(v) Config.FlingStyle = v end)
     ctrls.FlingPower = sliderRow(trollRight, 2, "Fling Power", 20, 200, Config.FlingPower, "", function(v) Config.FlingPower = v end)
 
@@ -2246,6 +2365,7 @@ local function Main()
 
         logo.BackgroundColor3 = C.ACCENT
         logoGradient.Color = ColorSequence.new(C.ACCENT, Color3.fromRGB(157, 116, 190))
+        toggleButton.BackgroundColor3 = C.ACCENT
         setStatus("UPDATED " .. key:upper() .. " COLOUR")
     end
 
