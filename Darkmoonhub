@@ -725,13 +725,16 @@ local function flingCharacter(targetChar)
 
     isFlinging = true
     local oldCF = root.CFrame
+    local power = math.max(tonumber(Config.FlingPower) or 90, 20)
+    local spinVel = math.max(power * 240, 25000)
+    local impulseMag = math.max(power * 95, 8500)
 
     if sethiddenproperty then
-        pcall(sethiddenproperty, LocalPlayer, "SimulationRadius", 10000)
-        pcall(sethiddenproperty, LocalPlayer, "MaxSimulationRadius", 10000)
+        pcall(sethiddenproperty, LocalPlayer, "SimulationRadius", math.huge)
+        pcall(sethiddenproperty, LocalPlayer, "MaxSimulationRadius", math.huge)
     end
     if setsimulationradius then
-        pcall(setsimulationradius, 10000)
+        pcall(setsimulationradius, math.huge, math.huge)
     end
 
     for _, obj in ipairs(root:GetChildren()) do
@@ -742,19 +745,20 @@ local function flingCharacter(targetChar)
 
     local bAV = Instance.new("BodyAngularVelocity")
     bAV.Name = "FlingTorque"
-    bAV.AngularVelocity = Vector3.new(0, 9e9, 0)
-    bAV.MaxTorque = Vector3.new(0, 9e9, 0)
-    bAV.P = 9e9
+    bAV.AngularVelocity = Vector3.new(spinVel, spinVel * 1.5, spinVel)
+    bAV.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bAV.P = 1e9
     bAV.Parent = root
 
     local bV = Instance.new("BodyVelocity")
     bV.Name = "FlingVelocity"
-    bV.Velocity = Vector3.new(0, 0, 0)
-    bV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bV.Velocity = Vector3.new(0, impulseMag * 0.65, 0)
+    bV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bV.P = 1e8
     bV.Parent = root
 
     local steppedConn = RunService.Stepped:Connect(function()
-        if not char or not root or not root.Parent then return end
+        if not char or not char.Parent then return end
         for _, child in ipairs(char:GetDescendants()) do
             if child:IsA("BasePart") then
                 child.CanCollide = false
@@ -763,7 +767,7 @@ local function flingCharacter(targetChar)
     end)
 
     local startTime = tick()
-    local duration = 1.5
+    local duration = 1.65
 
     while tick() - startTime < duration do
         if not targetChar or not targetChar.Parent or not tRoot or not tRoot.Parent or tHum.Health <= 0 then
@@ -773,21 +777,46 @@ local function flingCharacter(targetChar)
             break
         end
 
+        local elapsed = tick() - startTime
         local style = Config.FlingStyle
+        local targetVel = tRoot.AssemblyLinearVelocity or Vector3.zero
+        local leadPos = tRoot.Position + (targetVel * 0.14)
+
         if style == "Velocity" then
-            root.CFrame = CFrame.new(tRoot.Position + Vector3.new(0, 1.2, 0))
-            root.AssemblyLinearVelocity = Vector3.new(0, 9e9, 0)
-            root.AssemblyAngularVelocity = Vector3.new(9e9, 9e9, 9e9)
+            root.CFrame = CFrame.new(leadPos + Vector3.new(0, 0.4, 0))
+            bV.Velocity = Vector3.new(
+                math.sin(elapsed * 35) * impulseMag,
+                impulseMag,
+                math.cos(elapsed * 35) * impulseMag
+            )
+            root.AssemblyLinearVelocity = bV.Velocity
+            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel, spinVel)
         elseif style == "Orbit" then
-            local angle = (tick() - startTime) * 20
-            local off = Vector3.new(math.cos(angle) * 1.5, 0.5, math.sin(angle) * 1.5)
-            root.CFrame = CFrame.new(tRoot.Position + off, tRoot.Position)
-            root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
-            root.AssemblyAngularVelocity = Vector3.new(9e9, 9e9, 9e9)
+            local angle = elapsed * 28
+            local radius = 1.15
+            local off = Vector3.new(math.cos(angle) * radius, math.sin(elapsed * 18) * 0.8, math.sin(angle) * radius)
+            root.CFrame = CFrame.new(leadPos + off, leadPos)
+            bV.Velocity = Vector3.new(
+                math.cos(angle) * impulseMag,
+                impulseMag * 0.85,
+                math.sin(angle) * impulseMag
+            )
+            root.AssemblyLinearVelocity = bV.Velocity
+            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.35, spinVel)
         else
-            root.CFrame = tRoot.CFrame
-            root.AssemblyLinearVelocity = Vector3.new(9e9, 9e9, 9e9)
-            root.AssemblyAngularVelocity = Vector3.new(9e9, 9e9, 9e9)
+            local jitter = Vector3.new(
+                math.sin(elapsed * 45) * 0.45,
+                math.cos(elapsed * 40) * 0.35,
+                math.cos(elapsed * 45) * 0.45
+            )
+            root.CFrame = CFrame.new(leadPos + jitter) * CFrame.Angles(angle or 0, elapsed * 25, 0)
+            bV.Velocity = Vector3.new(
+                math.cos(elapsed * 32) * impulseMag * 0.85,
+                impulseMag,
+                math.sin(elapsed * 32) * impulseMag * 0.85
+            )
+            root.AssemblyLinearVelocity = bV.Velocity
+            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.5, spinVel)
         end
 
         RunService.Heartbeat:Wait()
@@ -1124,18 +1153,18 @@ local function Main()
 
     local toggleButton = make("TextButton", {
         Name = "ToggleButton",
-        Size = UDim2.fromOffset(118, 34),
-        Position = UDim2.new(0, 16, 0.5, -17),
+        Size = UDim2.fromOffset(46, 46),
+        Position = UDim2.new(0, 16, 0.5, -23),
         BackgroundColor3 = C.row,
-        Text = "DARK MOON",
-        Font = Enum.Font.GothamBold,
-        TextSize = 11,
+        Text = "D",
+        Font = Enum.Font.GothamBlack,
+        TextSize = 18,
         TextColor3 = C.ACCENT,
         AutoButtonColor = false,
         BorderSizePixel = 0,
         ZIndex = 10
     }, gui)
-    corner(toggleButton, 8)
+    corner(toggleButton, 23)
     outline(toggleButton)
 
     local scale = make("UIScale", {Scale = 1}, window)
@@ -1299,6 +1328,37 @@ local function Main()
     UIS.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
+        end
+    end)
+
+    local toggleDragging, toggleDragStart, toggleStartPos, toggleMoved = false, nil, nil, false
+    toggleButton.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            toggleDragging = true
+            toggleMoved = false
+            toggleDragStart = input.Position
+            toggleStartPos = toggleButton.Position
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if toggleDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - toggleDragStart
+            if delta.Magnitude > 6 then
+                toggleMoved = true
+            end
+            toggleButton.Position = UDim2.new(
+                toggleStartPos.X.Scale,
+                toggleStartPos.X.Offset + delta.X,
+                toggleStartPos.Y.Scale,
+                toggleStartPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    UIS.InputEnded:Connect(function(input)
+        if toggleDragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+            toggleDragging = false
         end
     end)
 
@@ -2370,7 +2430,9 @@ local function Main()
     end)
 
     toggleButton.MouseButton1Click:Connect(function()
-        setOpen(not isOpen)
+        if not toggleMoved then
+            setOpen(not isOpen)
+        end
     end)
 
     searchBox:GetPropertyChangedSignal("Text"):Connect(applySearchFilter)
