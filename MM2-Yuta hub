@@ -99,7 +99,6 @@ local Config = {
     JumpValue = 50,
     InfiniteJump = false,
     Noclip = false,
-    Fly = false,
     FlySpeed = 35,
 
     AntiVoid = true,
@@ -218,7 +217,7 @@ end
 local activeConnections = {}
 local trackedESPElements = {}
 local trackedTracers = {}
-local trackedBoxes2D = {}
+local tracked2DBoxes = {}
 local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
@@ -234,32 +233,40 @@ local function fireTouch(part1, part2)
     end
 end
 
-local function removeBox2D(id)
-    local boxData = trackedBoxes2D[id]
+local function clear2DBox(id)
+    local boxData = tracked2DBoxes[id]
     if boxData then
-        if boxData.outline then pcall(function() boxData.outline:Remove() end) end
-        if boxData.box then pcall(function() boxData.box:Remove() end) end
-        trackedBoxes2D[id] = nil
+        if boxData.box then
+            pcall(function() boxData.box:Remove() end)
+        end
+        if boxData.outline then
+            pcall(function() boxData.outline:Remove() end)
+        end
+        tracked2DBoxes[id] = nil
     end
 end
 
-local function clearBoxes2D(prefix)
-    prefix = prefix or ""
-    local toRemove = {}
-    for id in pairs(trackedBoxes2D) do
-        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
-            table.insert(toRemove, id)
+local function hideAll2DBoxes()
+    for _, boxData in pairs(tracked2DBoxes) do
+        if boxData then
+            pcall(function()
+                if boxData.box then boxData.box.Visible = false end
+                if boxData.outline then boxData.outline.Visible = false end
+            end)
         end
     end
-    for _, id in ipairs(toRemove) do
-        removeBox2D(id)
+end
+
+local function clearAll2DBoxes()
+    for id in pairs(tracked2DBoxes) do
+        clear2DBox(id)
     end
 end
 
 local function clearESPCategory(prefix)
     local toRemove = {}
     for id in pairs(trackedESPElements) do
-        if string.sub(id, 1, string.len(prefix)) == prefix then
+        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(toRemove, id)
         end
     end
@@ -269,9 +276,10 @@ local function clearESPCategory(prefix)
             trackedESPElements[id] = nil
         end
     end
+
     local tracersToRemove = {}
     for id in pairs(trackedTracers) do
-        if string.sub(id, 1, string.len(prefix)) == prefix then
+        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(tracersToRemove, id)
         end
     end
@@ -281,9 +289,19 @@ local function clearESPCategory(prefix)
             trackedTracers[id] = nil
         end
     end
-    clearBoxes2D(prefix)
+
+    local boxesToRemove = {}
+    for id in pairs(tracked2DBoxes) do
+        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
+            table.insert(boxesToRemove, id)
+        end
+    end
+    for _, id in ipairs(boxesToRemove) do
+        clear2DBox(id)
+    end
+
     for _, c in ipairs(espFolder:GetChildren()) do
-        if string.sub(c.Name, 1, string.len(prefix)) == prefix then
+        if prefix == "" or string.sub(c.Name, 1, string.len(prefix)) == prefix then
             pcall(function() c:Destroy() end)
         end
     end
@@ -1027,7 +1045,6 @@ if hookmetamethod and getnamecallmethod then
                             targetPos = targetPos + (tRoot.AssemblyLinearVelocity * lead)
                         end
                         args[2] = CFrame.new(targetPos)
-                        if setnamecallmethod then setnamecallmethod("FireServer") end
                         return oldNamecall(self, unpack(args))
                     end
                 end
@@ -1049,14 +1066,12 @@ if hookmetamethod and getnamecallmethod then
                             targetPos = targetPos + (mRoot.AssemblyLinearVelocity * lead)
                         end
                         args[2] = CFrame.new(targetPos)
-                        if setnamecallmethod then setnamecallmethod("FireServer") end
                         return oldNamecall(self, unpack(args))
                     end
                 end
             end
         end
 
-        if setnamecallmethod then setnamecallmethod(method) end
         return oldNamecall(self, ...)
     end))
 end
@@ -2026,13 +2041,13 @@ local function Main()
         Config.RoleESP = v
         if not v then clearESPCategory("mm2_") end
     end, Config.RoleESP)
-    ctrls.ESPChams = toggleRow(visualsLeft, 2, "Chams (3D Highlight)", "Renders 3D color highlights", nil, function(v)
+    ctrls.ESPChams = toggleRow(visualsLeft, 2, "Chams (3D Highlight)", "Renders 3D role chams highlight", nil, function(v)
         Config.ESPChams = v
         if not v then clearESPCategory("cham_") end
     end, Config.ESPChams)
-    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D Box ESP", "Draws 2D bounding boxes around players", nil, function(v)
+    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D Box ESP", "Draws screen-space 2D bounding boxes", nil, function(v)
         Config.ESPBoxes = v
-        if not v then clearBoxes2D("mm2_") end
+        if not v then hideAll2DBoxes() end
     end, Config.ESPBoxes)
     ctrls.ESPNames = toggleRow(visualsLeft, 4, "Role Tags & Names", "Shows role and player name", nil, function(v) Config.ESPNames = v end, Config.ESPNames)
     ctrls.ESPDistance = toggleRow(visualsLeft, 5, "Distance Labels", "Shows distance in studs", nil, function(v) Config.ESPDistance = v end, Config.ESPDistance)
@@ -2247,8 +2262,8 @@ local function Main()
         end
         for _, obj in ipairs(settingsLeft:GetDescendants()) do
             if obj:IsA("TextBox") then
-                local key = obj.Parent:FindFirstChildWhichIsA("TextLabel")
-                if key and C[key.Text] then obj.Text = toHex(C[key.Text]) end
+                local lbl = obj.Parent:FindFirstChildWhichIsA("TextLabel")
+                if lbl and C[lbl.Text] then obj.Text = toHex(C[lbl.Text]) end
             end
         end
         setStatus("DEFAULT COLOURS RESTORED")
@@ -2401,7 +2416,7 @@ local function Main()
     print("DISCORD: " .. DISCORD_INVITE)
     print("RIGHT SHIFT = MENU")
 
-    -- RUNTIME LOOPS & ESP
+    -- UPGRADED CHAMS, 2D BOX ESP, TRACERS & ESP HELPERS
     local function getOrCreateESP(id, adornee, text, color)
         local bb = trackedESPElements[id]
         if not bb or not bb.Parent then
@@ -2438,76 +2453,62 @@ local function Main()
     end
 
     local function getOrCreateCham(id, targetChar, color)
-        local hl = trackedESPElements["cham_" .. id]
+        local key = "cham_" .. tostring(id)
+        local hl = trackedESPElements[key]
         if not hl or not hl.Parent then
             hl = Instance.new("Highlight")
-            hl.Name = "cham_" .. id
+            hl.Name = key
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             hl.FillColor = color
-            hl.OutlineColor = Colors.TextPrimary
-            hl.FillTransparency = 0.45
-            hl.OutlineTransparency = 0.1
+            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+            hl.FillTransparency = 0.42
+            hl.OutlineTransparency = 0.05
             hl.Adornee = targetChar
             hl.Parent = espFolder
-            trackedESPElements["cham_" .. id] = hl
+            trackedESPElements[key] = hl
+        else
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.FillColor = color
+            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+            hl.FillTransparency = 0.42
+            hl.OutlineTransparency = 0.05
+            if hl.Adornee ~= targetChar then
+                hl.Adornee = targetChar
+            end
+            if hl.Parent ~= espFolder then
+                hl.Parent = espFolder
+            end
         end
-        hl.Adornee = targetChar
-        hl.FillColor = color
         return hl
     end
 
-    local function updateBox2D(id, targetChar, rootPart, color)
-        if not Drawing or not Drawing.new then return end
-        if not Config.ESPBoxes or not targetChar or not rootPart then
-            removeBox2D(id)
-            return
-        end
+    local function getCharacterScreenBounds(targetChar, fallbackRoot)
+        if not targetChar or not Camera then return nil end
 
-        local boxData = trackedBoxes2D[id]
-        if not boxData then
-            local ok, created = pcall(function()
-                local outlineQuad = Drawing.new("Quad")
-                outlineQuad.Thickness = 3
-                outlineQuad.Filled = false
-                outlineQuad.Color = Color3.new(0, 0, 0)
-                outlineQuad.Transparency = 0.65
-                outlineQuad.Visible = false
-
-                local mainQuad = Drawing.new("Quad")
-                mainQuad.Thickness = 1.5
-                mainQuad.Filled = false
-                mainQuad.Color = color
-                mainQuad.Transparency = 0.95
-                mainQuad.Visible = false
-
-                return {outline = outlineQuad, box = mainQuad}
-            end)
-            if ok and created then
-                boxData = created
-                trackedBoxes2D[id] = boxData
-            else
-                return
-            end
-        end
-
-        local cf, size = targetChar:GetBoundingBox()
-        if not size or size.Magnitude < 0.1 then
-            cf = rootPart.CFrame
+        local cf, size
+        local ok, bCf, bSize = pcall(function()
+            return targetChar:GetBoundingBox()
+        end)
+        if ok and bCf and bSize and bSize.Magnitude > 0.1 then
+            cf = bCf
+            size = bSize
+        elseif fallbackRoot then
+            cf = fallbackRoot.CFrame
             size = Vector3.new(4, 5.5, 2)
+        else
+            return nil
         end
 
-        local hx = size.X * 0.5
-        local hy = size.Y * 0.5
-        local hz = size.Z * 0.5
-
+        local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
         local corners = {
             cf * Vector3.new(-hx, -hy, -hz),
-            cf * Vector3.new(hx, -hy, -hz),
-            cf * Vector3.new(-hx, hy, -hz),
-            cf * Vector3.new(hx, hy, -hz),
-            cf * Vector3.new(-hx, -hy, hz),
-            cf * Vector3.new(hx, -hy, hz),
-            cf * Vector3.new(-hx, hy, hz),
-            cf * Vector3.new(hx, hy, hz)
+            cf * Vector3.new(-hx, -hy,  hz),
+            cf * Vector3.new(-hx,  hy, -hz),
+            cf * Vector3.new(-hx,  hy,  hz),
+            cf * Vector3.new( hx, -hy, -hz),
+            cf * Vector3.new( hx, -hy,  hz),
+            cf * Vector3.new( hx,  hy, -hz),
+            cf * Vector3.new( hx,  hy,  hz)
         }
 
         local minX, minY = math.huge, math.huge
@@ -2515,39 +2516,94 @@ local function Main()
         local anyOnScreen = false
 
         for _, cornerPos in ipairs(corners) do
-            local sp, onScreen = Camera:WorldToViewportPoint(cornerPos)
-            if sp.Z > 0 then
+            local screenPt, visible = Camera:WorldToViewportPoint(cornerPos)
+            if visible and screenPt.Z > 0 then
                 anyOnScreen = true
-                if sp.X < minX then minX = sp.X end
-                if sp.X > maxX then maxX = sp.X end
-                if sp.Y < minY then minY = sp.Y end
-                if sp.Y > maxY then maxY = sp.Y end
+            end
+            if screenPt.Z > 0 then
+                if screenPt.X < minX then minX = screenPt.X end
+                if screenPt.Y < minY then minY = screenPt.Y end
+                if screenPt.X > maxX then maxX = screenPt.X end
+                if screenPt.Y > maxY then maxY = screenPt.Y end
             end
         end
 
-        if not anyOnScreen or maxX <= minX or maxY <= minY then
-            boxData.box.Visible = false
-            boxData.outline.Visible = false
+        if not anyOnScreen or minX >= maxX or minY >= maxY then
+            return nil
+        end
+
+        local vp = Camera.ViewportSize
+        minX = math.clamp(minX, 0, vp.X)
+        maxX = math.clamp(maxX, 0, vp.X)
+        minY = math.clamp(minY, 0, vp.Y)
+        maxY = math.clamp(maxY, 0, vp.Y)
+
+        local width = maxX - minX
+        local height = maxY - minY
+        if width < 4 or height < 6 then
+            return nil
+        end
+
+        return Vector2.new(minX, minY), Vector2.new(width, height)
+    end
+
+    local function update2DBox(id, targetChar, fallbackRoot, color)
+        if not Drawing or not Drawing.new then return end
+
+        local boxData = tracked2DBoxes[id]
+        if not boxData then
+            local okCreate, created = pcall(function()
+                local outlineSq = Drawing.new("Square")
+                outlineSq.Thickness = 3
+                outlineSq.Filled = false
+                outlineSq.Transparency = 0.75
+                outlineSq.Color = Color3.fromRGB(10, 10, 14)
+                outlineSq.Visible = false
+
+                local mainSq = Drawing.new("Square")
+                mainSq.Thickness = 1.6
+                mainSq.Filled = false
+                mainSq.Transparency = 0.95
+                mainSq.Color = color
+                mainSq.Visible = false
+
+                return {box = mainSq, outline = outlineSq}
+            end)
+            if okCreate and created then
+                boxData = created
+                tracked2DBoxes[id] = boxData
+            else
+                return
+            end
+        end
+
+        if not Config.ESPBoxes or not targetChar then
+            pcall(function()
+                boxData.box.Visible = false
+                boxData.outline.Visible = false
+            end)
             return
         end
 
-        local topLeft = Vector2.new(minX, minY)
-        local topRight = Vector2.new(maxX, minY)
-        local bottomRight = Vector2.new(maxX, maxY)
-        local bottomLeft = Vector2.new(minX, maxY)
+        local topLeft, boxSize = getCharacterScreenBounds(targetChar, fallbackRoot)
+        if not topLeft or not boxSize then
+            pcall(function()
+                boxData.box.Visible = false
+                boxData.outline.Visible = false
+            end)
+            return
+        end
 
-        boxData.box.PointA = topLeft
-        boxData.box.PointB = topRight
-        boxData.box.PointC = bottomRight
-        boxData.box.PointD = bottomLeft
-        boxData.box.Color = color
-        boxData.box.Visible = true
+        pcall(function()
+            boxData.outline.Position = topLeft - Vector2.new(1, 1)
+            boxData.outline.Size = boxSize + Vector2.new(2, 2)
+            boxData.outline.Visible = true
 
-        boxData.outline.PointA = topLeft
-        boxData.outline.PointB = topRight
-        boxData.outline.PointC = bottomRight
-        boxData.outline.PointD = bottomLeft
-        boxData.outline.Visible = true
+            boxData.box.Position = topLeft
+            boxData.box.Size = boxSize
+            boxData.box.Color = color
+            boxData.box.Visible = true
+        end)
     end
 
     local function updateTracer(id, targetPos, color)
@@ -2798,19 +2854,20 @@ local function Main()
 
         if Config.RoleESP and root then
             for _, p in ipairs(Players:GetPlayers()) do
+                local idKey = "mm2_" .. tostring(p.UserId)
                 if p ~= LocalPlayer and p.Character and isPlayerAlive(p) then
                     local pRoot = getRootPart(p.Character)
                     if pRoot then
                         local dist = math.floor((root.Position - pRoot.Position).Magnitude)
-                        if dist <= Config.ESPDistanceMax then
-                            local role = getPlayerRole(p)
-                            local col = Colors.AccentGreen
-                            if role == "Murderer" then
-                                col = Colors.AccentRed
-                            elseif role == "Sheriff" then
-                                col = Colors.AccentBlue
-                            end
+                        local role = getPlayerRole(p)
+                        local col = Colors.AccentGreen
+                        if role == "Murderer" then
+                            col = Colors.AccentRed
+                        elseif role == "Sheriff" then
+                            col = Colors.AccentBlue
+                        end
 
+                        if dist <= Config.ESPDistanceMax then
                             local text = p.Name
                             if Config.ESPNames then
                                 text = "[" .. role .. "] " .. p.Name
@@ -2819,35 +2876,47 @@ local function Main()
                                 text = text .. " (" .. dist .. "s)"
                             end
 
-                            getOrCreateESP("mm2_" .. p.UserId, pRoot, text, col)
+                            getOrCreateESP(idKey, pRoot, text, col)
+
                             if Config.ESPChams then
                                 getOrCreateCham(p.UserId, p.Character, col)
+                            elseif trackedESPElements["cham_" .. tostring(p.UserId)] then
+                                trackedESPElements["cham_" .. tostring(p.UserId)]:Destroy()
+                                trackedESPElements["cham_" .. tostring(p.UserId)] = nil
                             end
-                            if Config.ESPBoxes then
-                                updateBox2D("mm2_" .. p.UserId, p.Character, pRoot, col)
-                            else
-                                removeBox2D("mm2_" .. p.UserId)
-                            end
-                            updateTracer("mm2_" .. p.UserId, pRoot.Position, col)
+
+                            update2DBox(idKey, p.Character, pRoot, col)
+                            updateTracer(idKey, pRoot.Position, col)
                         else
-                            removeBox2D("mm2_" .. p.UserId)
+                            if trackedESPElements[idKey] then
+                                trackedESPElements[idKey]:Destroy()
+                                trackedESPElements[idKey] = nil
+                            end
+                            if trackedESPElements["cham_" .. tostring(p.UserId)] then
+                                trackedESPElements["cham_" .. tostring(p.UserId)]:Destroy()
+                                trackedESPElements["cham_" .. tostring(p.UserId)] = nil
+                            end
+                            clear2DBox(idKey)
+                            removeTracer(idKey)
                         end
                     end
                 else
-                    if trackedESPElements["mm2_" .. p.UserId] then
-                        trackedESPElements["mm2_" .. p.UserId]:Destroy()
-                        trackedESPElements["mm2_" .. p.UserId] = nil
+                    if trackedESPElements[idKey] then
+                        trackedESPElements[idKey]:Destroy()
+                        trackedESPElements[idKey] = nil
                     end
-                    if trackedESPElements["cham_" .. p.UserId] then
-                        trackedESPElements["cham_" .. p.UserId]:Destroy()
-                        trackedESPElements["cham_" .. p.UserId] = nil
+                    if trackedESPElements["cham_" .. tostring(p.UserId)] then
+                        trackedESPElements["cham_" .. tostring(p.UserId)]:Destroy()
+                        trackedESPElements["cham_" .. tostring(p.UserId)] = nil
                     end
-                    removeBox2D("mm2_" .. p.UserId)
-                    removeTracer("mm2_" .. p.UserId)
+                    clear2DBox(idKey)
+                    removeTracer(idKey)
                 end
             end
         else
-            clearBoxes2D("mm2_")
+            clearESPCategory("mm2_")
+            clearESPCategory("cham_")
+            hideAll2DBoxes()
         end
 
         if Config.GunESP and root then
@@ -3131,11 +3200,11 @@ local function Main()
         end
         activeConnections = {}
         clearESPCategory("")
+        clearAll2DBoxes()
         for id in pairs(trackedTracers) do
             pcall(function() trackedTracers[id]:Remove() end)
         end
         trackedTracers = {}
-        clearBoxes2D("")
         silentAimHookActive = false
         if auraRingPart then
             pcall(function() auraRingPart:Destroy() end)
