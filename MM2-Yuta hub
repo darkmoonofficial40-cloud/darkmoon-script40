@@ -5,7 +5,7 @@
 -- By biyxznd
 -- Discord: https://discord.gg/QxRKp9wNeE
 
--- RIGHT SHIFT = Open / Close Menu | F = Spider Fly | END = Emergency Stop
+-- RIGHT SHIFT = Open / Close Menu | F = Toggle Spider Fly | END = Emergency Stop
 
 if getgenv and getgenv().IdenticalMM2Unload then
     pcall(getgenv().IdenticalMM2Unload)
@@ -99,7 +99,6 @@ local Config = {
     JumpValue = 50,
     InfiniteJump = false,
     Noclip = false,
-    SpiderFlyEnabled = false,
     FlySpeed = 75,
 
     AntiVoid = true,
@@ -215,33 +214,11 @@ if not espFolder then
     if not espFolder.Parent then espFolder.Parent = LocalPlayer.PlayerGui end
 end
 
-local boxOverlayGui = espFolder:FindFirstChild("Box2DOverlay")
-if not boxOverlayGui then
-    boxOverlayGui = Instance.new("ScreenGui")
-    boxOverlayGui.Name = "Box2DOverlay"
-    boxOverlayGui.ResetOnSpawn = false
-    boxOverlayGui.IgnoreGuiInset = true
-    boxOverlayGui.DisplayOrder = 500
-    boxOverlayGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    boxOverlayGui.Parent = espFolder
-end
-
 local activeConnections = {}
 local trackedESPElements = {}
-local trackedTracers = {}
-local tracked2DBoxes = {}
 local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
-
--- Spider-Web Fly state
-local FLY_TOGGLE_KEY = Enum.KeyCode.F
-local spiderFlying = false
-local swingPhase = 0
-local mobileJumpBoostUntil = 0
-local spiderBv, spiderBg, spiderFlyConn, spiderJumpConn
-local webAnchor, webBeam, rootAtt, anchorAtt
-local savedJoints = {}
 
 local function fireTouch(part1, part2)
     if firetouchinterest and part1 and part2 then
@@ -254,34 +231,12 @@ local function fireTouch(part1, part2)
     end
 end
 
-local function clear2DBox(id)
-    local boxData = tracked2DBoxes[id]
-    if boxData then
-        if boxData.frame then
-            pcall(function() boxData.frame:Destroy() end)
-        end
-        tracked2DBoxes[id] = nil
-    end
-end
-
-local function hideAll2DBoxes()
-    for _, boxData in pairs(tracked2DBoxes) do
-        if boxData and boxData.frame then
-            pcall(function() boxData.frame.Visible = false end)
-        end
-    end
-end
-
-local function clearAll2DBoxes()
-    for id in pairs(tracked2DBoxes) do
-        clear2DBox(id)
-    end
-end
+local trackedTracers = {}
 
 local function clearESPCategory(prefix)
     local toRemove = {}
     for id in pairs(trackedESPElements) do
-        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
+        if string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(toRemove, id)
         end
     end
@@ -291,10 +246,9 @@ local function clearESPCategory(prefix)
             trackedESPElements[id] = nil
         end
     end
-
     local tracersToRemove = {}
     for id in pairs(trackedTracers) do
-        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
+        if string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(tracersToRemove, id)
         end
     end
@@ -304,19 +258,8 @@ local function clearESPCategory(prefix)
             trackedTracers[id] = nil
         end
     end
-
-    local boxesToRemove = {}
-    for id in pairs(tracked2DBoxes) do
-        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
-            table.insert(boxesToRemove, id)
-        end
-    end
-    for _, id in ipairs(boxesToRemove) do
-        clear2DBox(id)
-    end
-
     for _, c in ipairs(espFolder:GetChildren()) do
-        if c ~= boxOverlayGui and (prefix == "" or string.sub(c.Name, 1, string.len(prefix)) == prefix) then
+        if string.sub(c.Name, 1, string.len(prefix)) == prefix then
             pcall(function() c:Destroy() end)
         end
     end
@@ -330,277 +273,6 @@ end
 local function getHumanoid(char)
     if not char then return nil end
     return char:FindFirstChildOfClass("Humanoid")
-end
-
-local function getSpiderChar()
-    local char = LocalPlayer.Character
-    return char, char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function findJoint(char, names)
-    for _, desc in ipairs(char:GetDescendants()) do
-        if desc:IsA("Motor6D") then
-            for _, n in ipairs(names) do
-                if desc.Name == n or (desc.Part1 and desc.Part1.Name == n) then
-                    return desc
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function capturePoseJoints(char)
-    savedJoints = {}
-    if not char then return end
-    local specs = {
-        waist = { "Waist", "RootJoint" },
-        neck = { "Neck" },
-        rShoulder = { "RightShoulder", "Right Shoulder" },
-        lShoulder = { "LeftShoulder", "Left Shoulder" },
-        rHip = { "RightHip", "Right Hip" },
-        lHip = { "LeftHip", "Left Hip" },
-        rKnee = { "RightKnee" },
-        lKnee = { "LeftKnee" }
-    }
-    for key, names in pairs(specs) do
-        local j = findJoint(char, names)
-        if j then
-            savedJoints[key] = { joint = j, c0 = j.C0 }
-        end
-    end
-end
-
-local function applyJointOffset(entry, offsetCFrame, alpha)
-    if not entry or not entry.joint or not entry.joint.Parent then return end
-    local goal = entry.c0 * offsetCFrame
-    entry.joint.C0 = entry.joint.C0:Lerp(goal, math.clamp(alpha, 0, 1))
-end
-
-local function restorePoseJoints()
-    for _, entry in pairs(savedJoints) do
-        if entry and entry.joint and entry.joint.Parent then
-            pcall(function()
-                entry.joint.C0 = entry.c0
-            end)
-        end
-    end
-    savedJoints = {}
-end
-
-local function clearWebVisual()
-    if webBeam then pcall(function() webBeam:Destroy() end) webBeam = nil end
-    if rootAtt then pcall(function() rootAtt:Destroy() end) rootAtt = nil end
-    if anchorAtt then pcall(function() anchorAtt:Destroy() end) anchorAtt = nil end
-    if webAnchor then pcall(function() webAnchor:Destroy() end) webAnchor = nil end
-end
-
-local isSyncingUI = false
-local SyncUIWithConfig = function() end
-local ctrls = {}
-
-local function stopSpiderFly(syncToggle)
-    spiderFlying = false
-    swingPhase = 0
-    if spiderFlyConn then spiderFlyConn:Disconnect() spiderFlyConn = nil end
-    if spiderBv then pcall(function() spiderBv:Destroy() end) spiderBv = nil end
-    if spiderBg then pcall(function() spiderBg:Destroy() end) spiderBg = nil end
-    clearWebVisual()
-    restorePoseJoints()
-    local _, _, hum = getSpiderChar()
-    if hum then hum.PlatformStand = false end
-    if Config.SpiderFlyEnabled then
-        Config.SpiderFlyEnabled = false
-        if syncToggle and ctrls.SpiderFlyEnabled then
-            isSyncingUI = true
-            ctrls.SpiderFlyEnabled.Set(false, true)
-            isSyncingUI = false
-        end
-    end
-end
-
-local function getWebAnchor(root, cam, char)
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    if char then rayParams.FilterDescendantsInstances = { char } end
-    local dir = (cam.CFrame.LookVector * 0.45 + Vector3.new(0, 0.85, 0)).Unit * 140
-    local hit = Workspace:Raycast(root.Position + Vector3.new(0, 2, 0), dir, rayParams)
-    if hit then return hit.Position end
-    return root.Position + cam.CFrame.LookVector * 36 + Vector3.new(0, 48, 0)
-end
-
-local function ensureWebVisual(root, anchorPos)
-    if not root or not root.Parent then return end
-    if not webAnchor or not webAnchor.Parent then
-        webAnchor = Instance.new("Part")
-        webAnchor.Name = "SpiderWebAnchor"
-        webAnchor.Size = Vector3.new(0.2, 0.2, 0.2)
-        webAnchor.Anchored = true
-        webAnchor.CanCollide = false
-        webAnchor.Transparency = 1
-        webAnchor.Parent = Workspace
-    end
-    webAnchor.Position = anchorPos
-
-    if not rootAtt or not rootAtt.Parent then
-        rootAtt = Instance.new("Attachment")
-        rootAtt.Name = "SpiderRootAtt"
-        rootAtt.Parent = root
-    end
-    if not anchorAtt or not anchorAtt.Parent then
-        anchorAtt = Instance.new("Attachment")
-        anchorAtt.Name = "SpiderAnchorAtt"
-        anchorAtt.Parent = webAnchor
-    end
-    if not webBeam or not webBeam.Parent then
-        webBeam = Instance.new("Beam")
-        webBeam.Name = "SpiderWebLine"
-        webBeam.Attachment0 = rootAtt
-        webBeam.Attachment1 = anchorAtt
-        webBeam.Color = ColorSequence.new(Color3.fromRGB(220, 225, 255), Color3.fromRGB(255, 255, 255))
-        webBeam.Width0 = 0.14
-        webBeam.Width1 = 0.08
-        webBeam.FaceCamera = true
-        webBeam.LightEmission = 0.35
-        webBeam.Parent = webAnchor
-    end
-end
-
-local function updateSpiderBodyPose(curRoot, lookDir, roll, pitch, swingArc, dt)
-    local blend = math.clamp((dt or 0.016) * 12, 0.1, 1)
-    local reachRight = swingArc >= 0
-
-    applyJointOffset(savedJoints.waist, CFrame.Angles(0.14 + math.abs(pitch) * 0.25, math.sin(swingPhase) * 0.22, -roll * 0.45), blend)
-    applyJointOffset(savedJoints.neck, CFrame.Angles(-pitch * 0.45 - 0.12, 0, -roll * 0.35), blend)
-
-    if reachRight then
-        local lift = 0.55 + math.max(0, swingArc) * 0.45
-        applyJointOffset(savedJoints.rShoulder, CFrame.Angles(math.rad(125 + lift * 35), 0, math.rad(-22)), blend)
-        applyJointOffset(savedJoints.lShoulder, CFrame.Angles(math.rad(-28 - swingArc * 18), 0, math.rad(26)), blend)
-    else
-        local lift = 0.55 + math.max(0, -swingArc) * 0.45
-        applyJointOffset(savedJoints.lShoulder, CFrame.Angles(math.rad(125 + lift * 35), 0, math.rad(22)), blend)
-        applyJointOffset(savedJoints.rShoulder, CFrame.Angles(math.rad(-28 + swingArc * 18), 0, math.rad(-26)), blend)
-    end
-
-    local legKick = math.sin(swingPhase) * 0.32
-    applyJointOffset(savedJoints.rHip, CFrame.Angles(-0.38 + legKick, 0.08, -0.08), blend)
-    applyJointOffset(savedJoints.lHip, CFrame.Angles(-0.22 - legKick, -0.08, 0.08), blend)
-    applyJointOffset(savedJoints.rKnee, CFrame.Angles(-math.max(0, 0.45 + legKick * 0.7), 0, 0), blend)
-    applyJointOffset(savedJoints.lKnee, CFrame.Angles(-math.max(0, 0.35 - legKick * 0.7), 0, 0), blend)
-
-    local baseCFrame = CFrame.lookAt(curRoot.Position, curRoot.Position + lookDir)
-    spiderBg.CFrame = baseCFrame * CFrame.Angles(pitch, 0, roll)
-end
-
-local function startSpiderFly()
-    stopSpiderFly(false)
-    local char, root, hum = getSpiderChar()
-    if not root or not hum then
-        Config.SpiderFlyEnabled = false
-        if ctrls.SpiderFlyEnabled then
-            isSyncingUI = true
-            ctrls.SpiderFlyEnabled.Set(false, true)
-            isSyncingUI = false
-        end
-        return false
-    end
-
-    Config.SpiderFlyEnabled = true
-    if ctrls.SpiderFlyEnabled and not ctrls.SpiderFlyEnabled.GetState() then
-        isSyncingUI = true
-        ctrls.SpiderFlyEnabled.Set(true, true)
-        isSyncingUI = false
-    end
-
-    spiderFlying = true
-    swingPhase = 0
-    capturePoseJoints(char)
-
-    spiderBv = Instance.new("BodyVelocity")
-    spiderBv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-    spiderBv.P = 18000
-    spiderBv.Velocity = Vector3.zero
-    spiderBv.Parent = root
-
-    spiderBg = Instance.new("BodyGyro")
-    spiderBg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-    spiderBg.P = 14000
-    spiderBg.CFrame = root.CFrame
-    spiderBg.Parent = root
-
-    hum.PlatformStand = true
-
-    spiderFlyConn = RunService.RenderStepped:Connect(function(dt)
-        local curChar, curRoot, curHum = getSpiderChar()
-        if not spiderFlying or not Config.SpiderFlyEnabled or not curChar or not curRoot or not curRoot.Parent or not curHum then
-            stopSpiderFly(true)
-            return
-        end
-        if not spiderBv or not spiderBv.Parent or not spiderBg or not spiderBg.Parent then
-            stopSpiderFly(true)
-            return
-        end
-
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-
-        local moveDir = Vector3.zero
-        local verticalInput = 0
-        local flySpeed = tonumber(Config.FlySpeed) or 75
-
-        if not UserInputService:GetFocusedTextBox() then
-            local forward = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-            if forward.Magnitude > 1e-4 then forward = forward.Unit else forward = Vector3.new(0, 0, -1) end
-            local rightVec = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
-            if rightVec.Magnitude > 1e-4 then rightVec = rightVec.Unit else rightVec = Vector3.new(1, 0, 0) end
-
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - forward end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + rightVec end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - rightVec end
-            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then verticalInput = verticalInput + 1 end
-            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then verticalInput = verticalInput - 1 end
-        end
-
-        local stickDir = curHum.MoveDirection
-        if stickDir.Magnitude > 0.05 then
-            moveDir = moveDir + Vector3.new(stickDir.X, 0, stickDir.Z)
-        end
-        if os.clock() < mobileJumpBoostUntil then
-            verticalInput = verticalInput + 1
-        end
-
-        if moveDir.Magnitude > 1 then moveDir = moveDir.Unit end
-
-        local activeMove = moveDir.Magnitude > 0.05 or math.abs(verticalInput) > 0.05
-        swingPhase = swingPhase + (dt or 0.016) * (activeMove and 5.4 or 1.8)
-        local swingArc = math.sin(swingPhase)
-        local pendulumLift = swingArc * (flySpeed * 0.18)
-        local targetVel = moveDir * flySpeed + Vector3.new(0, verticalInput * (flySpeed * 0.75) + pendulumLift, 0)
-
-        spiderBv.Velocity = spiderBv.Velocity:Lerp(targetVel, math.clamp((dt or 0.016) * 9, 0.08, 1))
-
-        local anchorPos = getWebAnchor(curRoot, cam, curChar)
-        ensureWebVisual(curRoot, anchorPos)
-
-        local lookDir = moveDir.Magnitude > 0.05 and moveDir or Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-        if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, -1) else lookDir = lookDir.Unit end
-
-        local pitch = -math.clamp(spiderBv.Velocity.Y / math.max(flySpeed, 1), -0.45, 0.55) - 0.16
-        local roll = -swingArc * 0.24
-        updateSpiderBodyPose(curRoot, lookDir, roll, pitch, swingArc, dt)
-    end)
-
-    return true
-end
-
-local function setSpiderFlyState(enabled)
-    if enabled then
-        startSpiderFly()
-    else
-        stopSpiderFly(true)
-    end
 end
 
 local function isPlayerAlive(p)
@@ -778,6 +450,283 @@ local function interactWithGunDrop(gunPart, gunObj)
     end
 end
 
+-- Spider-Man Web Fly system
+local FLY_TOGGLE_KEY = Enum.KeyCode.F
+local spiderFlying = false
+local swingPhase = 0
+local mobileJumpBoostUntil = 0
+local flyBV, flyBG, flyConn, flyJumpConn, flyCharAddedConn
+local webAnchor, webBeam, rootAtt, anchorAtt
+local savedJoints = {}
+
+local function getSpiderChar()
+    local char = LocalPlayer.Character
+    return char, char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function findJoint(char, names)
+    for _, desc in ipairs(char:GetDescendants()) do
+        if desc:IsA("Motor6D") then
+            for _, n in ipairs(names) do
+                if desc.Name == n or (desc.Part1 and desc.Part1.Name == n) then
+                    return desc
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function capturePoseJoints(char)
+    savedJoints = {}
+    if not char then return end
+    local specs = {
+        waist = { "Waist", "RootJoint" },
+        neck = { "Neck" },
+        rShoulder = { "RightShoulder", "Right Shoulder" },
+        lShoulder = { "LeftShoulder", "Left Shoulder" },
+        rHip = { "RightHip", "Right Hip" },
+        lHip = { "LeftHip", "Left Hip" },
+        rKnee = { "RightKnee" },
+        lKnee = { "LeftKnee" }
+    }
+    for key, names in pairs(specs) do
+        local j = findJoint(char, names)
+        if j then
+            savedJoints[key] = { joint = j, c0 = j.C0 }
+        end
+    end
+end
+
+local function applyJointOffset(entry, offsetCFrame, alpha)
+    if not entry or not entry.joint or not entry.joint.Parent then return end
+    local goal = entry.c0 * offsetCFrame
+    entry.joint.C0 = entry.joint.C0:Lerp(goal, math.clamp(alpha, 0, 1))
+end
+
+local function restorePoseJoints()
+    for _, entry in pairs(savedJoints) do
+        if entry and entry.joint and entry.joint.Parent then
+            pcall(function()
+                entry.joint.C0 = entry.c0
+            end)
+        end
+    end
+    savedJoints = {}
+end
+
+local function clearWebVisual()
+    if webBeam then pcall(function() webBeam:Destroy() end) webBeam = nil end
+    if rootAtt then pcall(function() rootAtt:Destroy() end) rootAtt = nil end
+    if anchorAtt then pcall(function() anchorAtt:Destroy() end) anchorAtt = nil end
+    if webAnchor then pcall(function() webAnchor:Destroy() end) webAnchor = nil end
+end
+
+local function stopSpiderFly()
+    spiderFlying = false
+    swingPhase = 0
+    if flyConn then flyConn:Disconnect() flyConn = nil end
+    if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
+    if flyBG then pcall(function() flyBG:Destroy() end) flyBG = nil end
+    clearWebVisual()
+    restorePoseJoints()
+    local _, _, hum = getSpiderChar()
+    if hum then hum.PlatformStand = false end
+end
+
+local function getWebAnchor(root, cam, char)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    if char then rayParams.FilterDescendantsInstances = { char } end
+    local dir = (cam.CFrame.LookVector * 0.45 + Vector3.new(0, 0.85, 0)).Unit * 140
+    local hit = Workspace:Raycast(root.Position + Vector3.new(0, 2, 0), dir, rayParams)
+    if hit then return hit.Position end
+    return root.Position + cam.CFrame.LookVector * 36 + Vector3.new(0, 48, 0)
+end
+
+local function ensureWebVisual(root, anchorPos)
+    if not root or not root.Parent then return end
+    if not webAnchor or not webAnchor.Parent then
+        webAnchor = Instance.new("Part")
+        webAnchor.Name = "SpiderWebAnchor"
+        webAnchor.Size = Vector3.new(0.2, 0.2, 0.2)
+        webAnchor.Anchored = true
+        webAnchor.CanCollide = false
+        webAnchor.Transparency = 1
+        webAnchor.Parent = Workspace
+    end
+    webAnchor.Position = anchorPos
+
+    if not rootAtt or not rootAtt.Parent then
+        rootAtt = Instance.new("Attachment")
+        rootAtt.Name = "SpiderRootAtt"
+        rootAtt.Parent = root
+    end
+    if not anchorAtt or not anchorAtt.Parent then
+        anchorAtt = Instance.new("Attachment")
+        anchorAtt.Name = "SpiderAnchorAtt"
+        anchorAtt.Parent = webAnchor
+    end
+    if not webBeam or not webBeam.Parent then
+        webBeam = Instance.new("Beam")
+        webBeam.Name = "SpiderWebLine"
+        webBeam.Attachment0 = rootAtt
+        webBeam.Attachment1 = anchorAtt
+        webBeam.Color = ColorSequence.new(Color3.fromRGB(220, 225, 255), Color3.fromRGB(255, 255, 255))
+        webBeam.Width0 = 0.14
+        webBeam.Width1 = 0.08
+        webBeam.FaceCamera = true
+        webBeam.LightEmission = 0.35
+        webBeam.Parent = webAnchor
+    end
+end
+
+local function updateSpiderBodyPose(curRoot, lookDir, roll, pitch, swingArc, dt)
+    local blend = math.clamp((dt or 0.016) * 12, 0.1, 1)
+    local reachRight = swingArc >= 0
+
+    applyJointOffset(savedJoints.waist, CFrame.Angles(0.14 + math.abs(pitch) * 0.25, math.sin(swingPhase) * 0.22, -roll * 0.45), blend)
+    applyJointOffset(savedJoints.neck, CFrame.Angles(-pitch * 0.45 - 0.12, 0, -roll * 0.35), blend)
+
+    if reachRight then
+        local lift = 0.55 + math.max(0, swingArc) * 0.45
+        applyJointOffset(savedJoints.rShoulder, CFrame.Angles(math.rad(125 + lift * 35), 0, math.rad(-22)), blend)
+        applyJointOffset(savedJoints.lShoulder, CFrame.Angles(math.rad(-28 - swingArc * 18), 0, math.rad(26)), blend)
+    else
+        local lift = 0.55 + math.max(0, -swingArc) * 0.45
+        applyJointOffset(savedJoints.lShoulder, CFrame.Angles(math.rad(125 + lift * 35), 0, math.rad(22)), blend)
+        applyJointOffset(savedJoints.rShoulder, CFrame.Angles(math.rad(-28 + swingArc * 18), 0, math.rad(-26)), blend)
+    end
+
+    local legKick = math.sin(swingPhase) * 0.32
+    applyJointOffset(savedJoints.rHip, CFrame.Angles(-0.38 + legKick, 0.08, -0.08), blend)
+    applyJointOffset(savedJoints.lHip, CFrame.Angles(-0.22 - legKick, -0.08, 0.08), blend)
+    applyJointOffset(savedJoints.rKnee, CFrame.Angles(-math.max(0, 0.45 + legKick * 0.7), 0, 0), blend)
+    applyJointOffset(savedJoints.lKnee, CFrame.Angles(-math.max(0, 0.35 - legKick * 0.7), 0, 0), blend)
+
+    local baseCFrame = CFrame.lookAt(curRoot.Position, curRoot.Position + lookDir)
+    flyBG.CFrame = baseCFrame * CFrame.Angles(pitch, 0, roll)
+end
+
+local function startSpiderFly()
+    stopSpiderFly()
+    local char, root, hum = getSpiderChar()
+    if not root or not hum then return false end
+
+    spiderFlying = true
+    swingPhase = 0
+    capturePoseJoints(char)
+
+    flyBV = Instance.new("BodyVelocity")
+    flyBV.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+    flyBV.P = 18000
+    flyBV.Velocity = Vector3.zero
+    flyBV.Parent = root
+
+    flyBG = Instance.new("BodyGyro")
+    flyBG.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+    flyBG.P = 14000
+    flyBG.CFrame = root.CFrame
+    flyBG.Parent = root
+
+    hum.PlatformStand = true
+
+    flyConn = RunService.RenderStepped:Connect(function(dt)
+        local curChar, curRoot, curHum = getSpiderChar()
+        if not spiderFlying or not curChar or not curRoot or not curRoot.Parent or not curHum then
+            stopSpiderFly()
+            return
+        end
+        if not flyBV or not flyBV.Parent or not flyBG or not flyBG.Parent then
+            stopSpiderFly()
+            return
+        end
+
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+
+        local flySpeed = tonumber(Config.FlySpeed) or 75
+        local moveDir = Vector3.zero
+        local verticalInput = 0
+
+        if not UserInputService:GetFocusedTextBox() then
+            local forward = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+            if forward.Magnitude > 1e-4 then forward = forward.Unit else forward = Vector3.new(0, 0, -1) end
+            local rightVec = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
+            if rightVec.Magnitude > 1e-4 then rightVec = rightVec.Unit else rightVec = Vector3.new(1, 0, 0) end
+
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + forward end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - forward end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + rightVec end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - rightVec end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then verticalInput = verticalInput + 1 end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then verticalInput = verticalInput - 1 end
+        end
+
+        local stickDir = curHum.MoveDirection
+        if stickDir.Magnitude > 0.05 then
+            moveDir = moveDir + Vector3.new(stickDir.X, 0, stickDir.Z)
+        end
+        if os.clock() < mobileJumpBoostUntil then
+            verticalInput = verticalInput + 1
+        end
+
+        if moveDir.Magnitude > 1 then moveDir = moveDir.Unit end
+
+        local activeMove = moveDir.Magnitude > 0.05 or math.abs(verticalInput) > 0.05
+        swingPhase = swingPhase + (dt or 0.016) * (activeMove and 5.4 or 1.8)
+        local swingArc = math.sin(swingPhase)
+        local pendulumLift = swingArc * (flySpeed * 0.18)
+        local targetVel = moveDir * flySpeed + Vector3.new(0, verticalInput * (flySpeed * 0.75) + pendulumLift, 0)
+
+        flyBV.Velocity = flyBV.Velocity:Lerp(targetVel, math.clamp((dt or 0.016) * 9, 0.08, 1))
+
+        local anchorPos = getWebAnchor(curRoot, cam, curChar)
+        ensureWebVisual(curRoot, anchorPos)
+
+        local lookDir = moveDir.Magnitude > 0.05 and moveDir or Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+        if lookDir.Magnitude < 1e-4 then lookDir = Vector3.new(0, 0, -1) else lookDir = lookDir.Unit end
+
+        local pitch = -math.clamp(flyBV.Velocity.Y / math.max(flySpeed, 1), -0.45, 0.55) - 0.16
+        local roll = -swingArc * 0.24
+        updateSpiderBodyPose(curRoot, lookDir, roll, pitch, swingArc, dt)
+    end)
+
+    return true
+end
+
+local function toggleSpiderFly()
+    if spiderFlying then
+        stopSpiderFly()
+    else
+        startSpiderFly()
+    end
+end
+
+table.insert(activeConnections, UserInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == FLY_TOGGLE_KEY then
+        toggleSpiderFly()
+    end
+end))
+
+flyJumpConn = UserInputService.JumpRequest:Connect(function()
+    if spiderFlying then
+        mobileJumpBoostUntil = os.clock() + 0.35
+    end
+end)
+table.insert(activeConnections, flyJumpConn)
+
+flyCharAddedConn = LocalPlayer.CharacterAdded:Connect(function()
+    stopSpiderFly()
+end)
+table.insert(activeConnections, flyCharAddedConn)
+
+-- Forward UI & Action references
+local isSyncingUI = false
+local SyncUIWithConfig = function() end
+local ctrls = {}
+
 local SendNotification = function(title, text, duration)
     pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
@@ -794,6 +743,23 @@ local murdererRow = { SetValue = function(_) end, SetColor = function(_) end }
 local sheriffRow = { SetValue = function(_) end, SetColor = function(_) end }
 
 local Actions = {}
+
+function Actions.SetFlyEnabled(enabled)
+    if enabled then
+        startSpiderFly()
+    else
+        stopSpiderFly()
+    end
+end
+
+function Actions.CopyDiscord()
+    if setclipboard then
+        setclipboard(DISCORD_INVITE)
+        SendNotification("Discord", "Copied invite link: " .. DISCORD_INVITE, 3)
+    else
+        SendNotification("Discord", DISCORD_INVITE, 4)
+    end
+end
 
 function Actions.ShootMurderer()
     local murderer = nil
@@ -880,15 +846,6 @@ function Actions.AnnounceRoles()
     SendNotification("Identical", "Roles announced in chat!", 2)
 end
 
-function Actions.CopyDiscord()
-    if setclipboard then
-        setclipboard(DISCORD_INVITE)
-        SendNotification("Discord", "Copied invite link: " .. DISCORD_INVITE, 3)
-    else
-        SendNotification("Discord", DISCORD_INVITE, 4)
-    end
-end
-
 function Actions.CopyDeathList()
     if #deadPlayersList == 0 then
         SendNotification("Identical", "No recorded deaths yet this round.", 2)
@@ -918,7 +875,6 @@ function Actions.ReloadConfig()
 end
 
 function Actions.ResetDefaults()
-    stopSpiderFly(false)
     for k, v in pairs(DefaultConfig) do
         Config[k] = v
     end
@@ -1336,6 +1292,7 @@ if hookmetamethod and getnamecallmethod then
                             targetPos = targetPos + (tRoot.AssemblyLinearVelocity * lead)
                         end
                         args[2] = CFrame.new(targetPos)
+                        if setnamecallmethod then setnamecallmethod("FireServer") end
                         return oldNamecall(self, unpack(args))
                     end
                 end
@@ -1357,12 +1314,14 @@ if hookmetamethod and getnamecallmethod then
                             targetPos = targetPos + (mRoot.AssemblyLinearVelocity * lead)
                         end
                         args[2] = CFrame.new(targetPos)
+                        if setnamecallmethod then setnamecallmethod("FireServer") end
                         return oldNamecall(self, unpack(args))
                     end
                 end
             end
         end
 
+        if setnamecallmethod then setnamecallmethod(method) end
         return oldNamecall(self, ...)
     end))
 end
@@ -2207,7 +2166,7 @@ local function Main()
         corner(row, 9)
 
         make("TextLabel", {
-            Size = UDim2.new(0.45, -14, 1, 0),
+            Size = UDim2.new(0.42, -14, 1, 0),
             Position = UDim2.fromOffset(14, 0),
             BackgroundTransparency = 1,
             Text = title,
@@ -2218,8 +2177,8 @@ local function Main()
         }, row)
 
         local valLbl = make("TextLabel", {
-            Size = UDim2.new(0.53, -14, 1, 0),
-            Position = UDim2.new(0.45, 0, 0, 0),
+            Size = UDim2.new(0.56, -14, 1, 0),
+            Position = UDim2.new(0.42, 0, 0, 0),
             BackgroundTransparency = 1,
             Text = tostring(initialValue or ""),
             Font = Enum.Font.GothamBold,
@@ -2258,27 +2217,28 @@ local function Main()
 
     -- 1. HOME TAB
     local homeTab = newTab("Home", 1)
-    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS & ROLES")
+    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS, DISCORD & ROLES")
     local homeRight = column(homeTab, 0.5, 0.5, "QUICK ACTIONS & CONFIG")
 
-    statusRoundRow = infoRow(homeLeft, 1, "Round State", "Waiting...", C.ACCENT)
-    timerRoundRow = infoRow(homeLeft, 2, "Time Remaining", "0:00", C.text)
-    murdererRow = infoRow(homeLeft, 3, "Murderer", "Undetected", C.bad)
-    sheriffRow = infoRow(homeLeft, 4, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
+    infoRow(homeLeft, 1, "Discord", DISCORD_INVITE, C.ACCENT)
+    buttonRow(homeLeft, 2, "COPY DISCORD INVITE", C.row, Actions.CopyDiscord)
+    statusRoundRow = infoRow(homeLeft, 3, "Round State", "Waiting...", C.ACCENT)
+    timerRoundRow = infoRow(homeLeft, 4, "Time Remaining", "0:00", C.text)
+    murdererRow = infoRow(homeLeft, 5, "Murderer", "Undetected", C.bad)
+    sheriffRow = infoRow(homeLeft, 6, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
 
-    ctrls.RoundTimer = toggleRow(homeLeft, 5, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
-    ctrls.DeathNotifs = toggleRow(homeLeft, 6, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
-    ctrls.RoleReveals = toggleRow(homeLeft, 7, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
-    ctrls.AnnounceRoles = toggleRow(homeLeft, 8, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
+    ctrls.RoundTimer = toggleRow(homeLeft, 7, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
+    ctrls.DeathNotifs = toggleRow(homeLeft, 8, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
+    ctrls.RoleReveals = toggleRow(homeLeft, 9, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
+    ctrls.AnnounceRoles = toggleRow(homeLeft, 10, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
 
     buttonRow(homeRight, 1, "SHOOT MURDERER", C.row, Actions.ShootMurderer)
     buttonRow(homeRight, 2, "GRAB GUN", C.row, Actions.GrabGun)
     buttonRow(homeRight, 3, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
-    buttonRow(homeRight, 4, "COPY DISCORD INVITE", C.row, Actions.CopyDiscord)
-    buttonRow(homeRight, 5, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
-    buttonRow(homeRight, 6, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
-    buttonRow(homeRight, 7, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
-    buttonRow(homeRight, 8, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
+    buttonRow(homeRight, 4, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
+    buttonRow(homeRight, 5, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
+    buttonRow(homeRight, 6, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
+    buttonRow(homeRight, 7, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
 
     -- 2. COMBAT TAB
     local combatTab = newTab("Combat", 2)
@@ -2333,14 +2293,11 @@ local function Main()
         Config.RoleESP = v
         if not v then clearESPCategory("mm2_") end
     end, Config.RoleESP)
-    ctrls.ESPChams = toggleRow(visualsLeft, 2, "Chams (3D Highlight)", "Renders 3D role chams highlight", nil, function(v)
+    ctrls.ESPChams = toggleRow(visualsLeft, 2, "Chams (3D Highlight)", "Renders 3D color highlights", nil, function(v)
         Config.ESPChams = v
         if not v then clearESPCategory("cham_") end
     end, Config.ESPChams)
-    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D Box ESP", "Draws screen-space 2D bounding boxes", nil, function(v)
-        Config.ESPBoxes = v
-        if not v then hideAll2DBoxes() end
-    end, Config.ESPBoxes)
+    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "Player Boxes", "Toggles player box ESP option", nil, function(v) Config.ESPBoxes = v end, Config.ESPBoxes)
     ctrls.ESPNames = toggleRow(visualsLeft, 4, "Role Tags & Names", "Shows role and player name", nil, function(v) Config.ESPNames = v end, Config.ESPNames)
     ctrls.ESPDistance = toggleRow(visualsLeft, 5, "Distance Labels", "Shows distance in studs", nil, function(v) Config.ESPDistance = v end, Config.ESPDistance)
     ctrls.ESPTracers = toggleRow(visualsLeft, 6, "Snapline Tracers", "Draws tracer lines to targets", nil, function(v)
@@ -2427,22 +2384,19 @@ local function Main()
     ctrls.JumpValue = sliderRow(miscLeft, 4, "Jump Power", 50, 100, Config.JumpValue, "", function(v) Config.JumpValue = v end)
     ctrls.InfiniteJump = toggleRow(miscLeft, 5, "Infinite Jump", "Jump mid-air with Space", nil, function(v) Config.InfiniteJump = v end, Config.InfiniteJump)
     ctrls.Noclip = toggleRow(miscLeft, 6, "Noclip", "Walk through parts", nil, function(v) Config.Noclip = v end, Config.Noclip)
-    ctrls.SpiderFlyEnabled = toggleRow(miscLeft, 7, "Spider Web Fly", "Web-swing flight with pose & anchor", FLY_TOGGLE_KEY, function(v)
-        setSpiderFlyState(v)
-    end, Config.SpiderFlyEnabled)
-    ctrls.FlySpeed = sliderRow(miscLeft, 8, "Fly Speed", 10, 120, Config.FlySpeed, "", function(v) Config.FlySpeed = v end)
-    ctrls.Fullbright = toggleRow(miscLeft, 9, "Fullbright", "Eliminates darkness", nil, function(v)
+    ctrls.FlySpeed = sliderRow(miscLeft, 7, "Fly Speed", 10, 100, Config.FlySpeed, "", function(v) Config.FlySpeed = v end)
+    ctrls.Fullbright = toggleRow(miscLeft, 8, "Fullbright", "Eliminates darkness", nil, function(v)
         Config.Fullbright = v
         if not v then
             Lighting.Ambient = Color3.fromRGB(128, 128, 128)
             Lighting.Brightness = 1
         end
     end, Config.Fullbright)
-    ctrls.NoFog = toggleRow(miscLeft, 10, "Remove Fog", "Clears distance fog", nil, function(v)
+    ctrls.NoFog = toggleRow(miscLeft, 9, "Remove Fog", "Clears distance fog", nil, function(v)
         Config.NoFog = v
         if not v then Lighting.FogEnd = 1000 end
     end, Config.NoFog)
-    ctrls.DisableParticles = toggleRow(miscLeft, 11, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
+    ctrls.DisableParticles = toggleRow(miscLeft, 10, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
 
     ctrls.AntiFling = toggleRow(miscRight, 1, "Anti-Fling", "Blocks player collisions & flings", nil, function(v) Config.AntiFling = v end, Config.AntiFling)
     ctrls.AntiVoid = toggleRow(miscRight, 2, "Anti-Void", "Recovers when falling into void", nil, function(v) Config.AntiVoid = v end, Config.AntiVoid)
@@ -2557,8 +2511,8 @@ local function Main()
         end
         for _, obj in ipairs(settingsLeft:GetDescendants()) do
             if obj:IsA("TextBox") then
-                local lbl = obj.Parent:FindFirstChildWhichIsA("TextLabel")
-                if lbl and C[lbl.Text] then obj.Text = toHex(C[lbl.Text]) end
+                local key = obj.Parent:FindFirstChildWhichIsA("TextLabel")
+                if key and C[key.Text] then obj.Text = toHex(C[key.Text]) end
             end
         end
         setStatus("DEFAULT COLOURS RESTORED")
@@ -2636,9 +2590,6 @@ local function Main()
     end
 
     SyncUIWithConfig()
-    if Config.SpiderFlyEnabled then
-        task.defer(startSpiderFly)
-    end
 
     -- MENU CONTROLS
     local isOpen = true
@@ -2696,11 +2647,11 @@ local function Main()
             Config.AutoShoot = false
             Config.CoinFarm = false
             Config.AutoKill = false
-            stopSpiderFly(false)
+            stopSpiderFly()
             SyncUIWithConfig()
             SendNotification("Identical", "EMERGENCY STOP: Features halted.", 2)
             return
-        elseif input.KeyCode == Enum.KeyCode.Space and Config.InfiniteJump and not spiderFlying then
+        elseif input.KeyCode == Enum.KeyCode.Space and Config.InfiniteJump then
             local hum = getHumanoid(LocalPlayer.Character)
             if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
         end
@@ -2708,25 +2659,14 @@ local function Main()
         if obj then obj.Toggle() end
     end))
 
-    spiderJumpConn = UIS.JumpRequest:Connect(function()
-        if spiderFlying then
-            mobileJumpBoostUntil = os.clock() + 0.35
-        end
-    end)
-    table.insert(activeConnections, spiderJumpConn)
-
-    table.insert(activeConnections, LocalPlayer.CharacterAdded:Connect(function()
-        stopSpiderFly(true)
-    end))
-
     showPage("Home")
-    setStatus("READY | RIGHT SHIFT: MENU | F: FLY")
+    setStatus("READY | RIGHT SHIFT: MENU")
     notify("DARK MOON V 1.2 Loaded!")
     print("DARK MOON V 1.2 LOADED | BY BIYXZND")
     print("DISCORD: " .. DISCORD_INVITE)
-    print("RIGHT SHIFT = MENU | F = SPIDER FLY")
+    print("RIGHT SHIFT = MENU")
 
-    -- CHAMS, UI-BASED 2D BOX ESP, TRACERS & ESP HELPERS
+    -- RUNTIME LOOPS & ESP
     local function getOrCreateESP(id, adornee, text, color)
         local bb = trackedESPElements[id]
         if not bb or not bb.Parent then
@@ -2763,152 +2703,21 @@ local function Main()
     end
 
     local function getOrCreateCham(id, targetChar, color)
-        local key = "cham_" .. tostring(id)
-        local hl = trackedESPElements[key]
+        local hl = trackedESPElements["cham_" .. id]
         if not hl or not hl.Parent then
             hl = Instance.new("Highlight")
-            hl.Name = key
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.Name = "cham_" .. id
             hl.FillColor = color
-            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-            hl.FillTransparency = 0.42
-            hl.OutlineTransparency = 0.05
+            hl.OutlineColor = Colors.TextPrimary
+            hl.FillTransparency = 0.45
+            hl.OutlineTransparency = 0.1
             hl.Adornee = targetChar
             hl.Parent = espFolder
-            trackedESPElements[key] = hl
-        else
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.FillColor = color
-            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-            hl.FillTransparency = 0.42
-            hl.OutlineTransparency = 0.05
-            if hl.Adornee ~= targetChar then
-                hl.Adornee = targetChar
-            end
-            if hl.Parent ~= espFolder then
-                hl.Parent = espFolder
-            end
+            trackedESPElements["cham_" .. id] = hl
         end
+        hl.Adornee = targetChar
+        hl.FillColor = color
         return hl
-    end
-
-    local function getCharacterScreenBounds(targetChar, fallbackRoot)
-        local activeCam = Workspace.CurrentCamera
-        if not targetChar or not activeCam then return nil end
-
-        local cf, size
-        local ok, bCf, bSize = pcall(function()
-            return targetChar:GetBoundingBox()
-        end)
-        if ok and bCf and bSize and bSize.Magnitude > 0.1 then
-            cf = bCf
-            size = bSize
-        elseif fallbackRoot then
-            cf = fallbackRoot.CFrame
-            size = Vector3.new(4, 5.5, 2)
-        else
-            return nil
-        end
-
-        local hx, hy, hz = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
-        local corners = {
-            cf * Vector3.new(-hx, -hy, -hz),
-            cf * Vector3.new(-hx, -hy,  hz),
-            cf * Vector3.new(-hx,  hy, -hz),
-            cf * Vector3.new(-hx,  hy,  hz),
-            cf * Vector3.new( hx, -hy, -hz),
-            cf * Vector3.new( hx, -hy,  hz),
-            cf * Vector3.new( hx,  hy, -hz),
-            cf * Vector3.new( hx,  hy,  hz)
-        }
-
-        local minX, minY = math.huge, math.huge
-        local maxX, maxY = -math.huge, -math.huge
-        local anyOnScreen = false
-
-        for _, cornerPos in ipairs(corners) do
-            local screenPt, visible = activeCam:WorldToViewportPoint(cornerPos)
-            if visible and screenPt.Z > 0 then
-                anyOnScreen = true
-            end
-            if screenPt.Z > 0 then
-                if screenPt.X < minX then minX = screenPt.X end
-                if screenPt.Y < minY then minY = screenPt.Y end
-                if screenPt.X > maxX then maxX = screenPt.X end
-                if screenPt.Y > maxY then maxY = screenPt.Y end
-            end
-        end
-
-        if not anyOnScreen or minX >= maxX or minY >= maxY then
-            return nil
-        end
-
-        local vp = activeCam.ViewportSize
-        minX = math.clamp(minX, 0, vp.X)
-        maxX = math.clamp(maxX, 0, vp.X)
-        minY = math.clamp(minY, 0, vp.Y)
-        maxY = math.clamp(maxY, 0, vp.Y)
-
-        local width = maxX - minX
-        local height = maxY - minY
-        if width < 4 or height < 6 then
-            return nil
-        end
-
-        return Vector2.new(minX, minY), Vector2.new(width, height)
-    end
-
-    local function update2DBox(id, targetChar, fallbackRoot, color)
-        if not boxOverlayGui or not boxOverlayGui.Parent then
-            boxOverlayGui = Instance.new("ScreenGui")
-            boxOverlayGui.Name = "Box2DOverlay"
-            boxOverlayGui.ResetOnSpawn = false
-            boxOverlayGui.IgnoreGuiInset = true
-            boxOverlayGui.DisplayOrder = 500
-            boxOverlayGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-            boxOverlayGui.Parent = espFolder
-        end
-
-        local boxData = tracked2DBoxes[id]
-        if not boxData or not boxData.frame or not boxData.frame.Parent then
-            local frame = Instance.new("Frame")
-            frame.Name = "Box2D_" .. tostring(id)
-            frame.BackgroundColor3 = color
-            frame.BackgroundTransparency = 0.92
-            frame.BorderSizePixel = 0
-            frame.Visible = false
-            frame.Parent = boxOverlayGui
-
-            local outerStroke = Instance.new("UIStroke")
-            outerStroke.Name = "BoxStroke"
-            outerStroke.Color = color
-            outerStroke.Thickness = 1.6
-            outerStroke.Transparency = 0.05
-            outerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-            outerStroke.Parent = frame
-
-            boxData = {frame = frame, stroke = outerStroke}
-            tracked2DBoxes[id] = boxData
-        end
-
-        if not Config.ESPBoxes or not targetChar then
-            boxData.frame.Visible = false
-            return
-        end
-
-        local topLeft, boxSize = getCharacterScreenBounds(targetChar, fallbackRoot)
-        if not topLeft or not boxSize then
-            boxData.frame.Visible = false
-            return
-        end
-
-        boxData.frame.Position = UDim2.fromOffset(math.floor(topLeft.X + 0.5), math.floor(topLeft.Y + 0.5))
-        boxData.frame.Size = UDim2.fromOffset(math.floor(boxSize.X + 0.5), math.floor(boxSize.Y + 0.5))
-        boxData.frame.BackgroundColor3 = color
-        if boxData.stroke then
-            boxData.stroke.Color = color
-        end
-        boxData.frame.Visible = true
     end
 
     local function updateTracer(id, targetPos, color)
@@ -3051,7 +2860,7 @@ local function Main()
     end
 
     table.insert(activeConnections, RunService.Stepped:Connect(function()
-        if Config.AntiFling and not isFlinging then
+        if Config.AntiFling and not isFlinging and not spiderFlying then
             for _, p in ipairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and p.Character then
                     for _, part in ipairs(p.Character:GetChildren()) do
@@ -3159,20 +2968,19 @@ local function Main()
 
         if Config.RoleESP and root then
             for _, p in ipairs(Players:GetPlayers()) do
-                local idKey = "mm2_" .. tostring(p.UserId)
                 if p ~= LocalPlayer and p.Character and isPlayerAlive(p) then
                     local pRoot = getRootPart(p.Character)
                     if pRoot then
                         local dist = math.floor((root.Position - pRoot.Position).Magnitude)
-                        local role = getPlayerRole(p)
-                        local col = Colors.AccentGreen
-                        if role == "Murderer" then
-                            col = Colors.AccentRed
-                        elseif role == "Sheriff" then
-                            col = Colors.AccentBlue
-                        end
-
                         if dist <= Config.ESPDistanceMax then
+                            local role = getPlayerRole(p)
+                            local col = Colors.AccentGreen
+                            if role == "Murderer" then
+                                col = Colors.AccentRed
+                            elseif role == "Sheriff" then
+                                col = Colors.AccentBlue
+                            end
+
                             local text = p.Name
                             if Config.ESPNames then
                                 text = "[" .. role .. "] " .. p.Name
@@ -3181,47 +2989,25 @@ local function Main()
                                 text = text .. " (" .. dist .. "s)"
                             end
 
-                            getOrCreateESP(idKey, pRoot, text, col)
-
+                            getOrCreateESP("mm2_" .. p.UserId, pRoot, text, col)
                             if Config.ESPChams then
                                 getOrCreateCham(p.UserId, p.Character, col)
-                            elseif trackedESPElements["cham_" .. tostring(p.UserId)] then
-                                trackedESPElements["cham_" .. tostring(p.UserId)]:Destroy()
-                                trackedESPElements["cham_" .. tostring(p.UserId)] = nil
                             end
-
-                            update2DBox(idKey, p.Character, pRoot, col)
-                            updateTracer(idKey, pRoot.Position, col)
-                        else
-                            if trackedESPElements[idKey] then
-                                trackedESPElements[idKey]:Destroy()
-                                trackedESPElements[idKey] = nil
-                            end
-                            if trackedESPElements["cham_" .. tostring(p.UserId)] then
-                                trackedESPElements["cham_" .. tostring(p.UserId)]:Destroy()
-                                trackedESPElements["cham_" .. tostring(p.UserId)] = nil
-                            end
-                            clear2DBox(idKey)
-                            removeTracer(idKey)
+                            updateTracer("mm2_" .. p.UserId, pRoot.Position, col)
                         end
                     end
                 else
-                    if trackedESPElements[idKey] then
-                        trackedESPElements[idKey]:Destroy()
-                        trackedESPElements[idKey] = nil
+                    if trackedESPElements["mm2_" .. p.UserId] then
+                        trackedESPElements["mm2_" .. p.UserId]:Destroy()
+                        trackedESPElements["mm2_" .. p.UserId] = nil
                     end
-                    if trackedESPElements["cham_" .. tostring(p.UserId)] then
-                        trackedESPElements["cham_" .. tostring(p.UserId)]:Destroy()
-                        trackedESPElements["cham_" .. tostring(p.UserId)] = nil
+                    if trackedESPElements["cham_" .. p.UserId] then
+                        trackedESPElements["cham_" .. p.UserId]:Destroy()
+                        trackedESPElements["cham_" .. p.UserId] = nil
                     end
-                    clear2DBox(idKey)
-                    removeTracer(idKey)
+                    removeTracer("mm2_" .. p.UserId)
                 end
             end
-        else
-            clearESPCategory("mm2_")
-            clearESPCategory("cham_")
-            hideAll2DBoxes()
         end
 
         if Config.GunESP and root then
@@ -3500,16 +3286,12 @@ local function Main()
     end))
 
     getgenv().IdenticalMM2Unload = function()
-        stopSpiderFly(false)
+        pcall(stopSpiderFly)
         for _, conn in ipairs(activeConnections) do
             pcall(function() conn:Disconnect() end)
         end
         activeConnections = {}
         clearESPCategory("")
-        clearAll2DBoxes()
-        if boxOverlayGui and boxOverlayGui.Parent then
-            pcall(function() boxOverlayGui:Destroy() end)
-        end
         for id in pairs(trackedTracers) do
             pcall(function() trackedTracers[id]:Remove() end)
         end
