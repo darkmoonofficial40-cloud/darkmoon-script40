@@ -99,7 +99,6 @@ local Config = {
     JumpValue = 50,
     InfiniteJump = false,
     Noclip = false,
-    Fly = false,
     FlySpeed = 35,
 
     AntiVoid = true,
@@ -569,6 +568,15 @@ function Actions.CopyDeathList()
         SendNotification("Identical", "Death list copied to clipboard!", 2)
     else
         SendNotification("Identical", "Clipboard API not supported.", 2)
+    end
+end
+
+function Actions.CopyDiscordInvite()
+    if setclipboard then
+        setclipboard(DISCORD_INVITE)
+        SendNotification("Discord", "Copied Discord invite: " .. DISCORD_INVITE, 3)
+    else
+        SendNotification("Discord", DISCORD_INVITE, 4)
     end
 end
 
@@ -1113,6 +1121,22 @@ local function Main()
     }, gui)
     corner(window, 12)
     outline(window)
+
+    local toggleButton = make("TextButton", {
+        Name = "ToggleButton",
+        Size = UDim2.fromOffset(118, 34),
+        Position = UDim2.new(0, 16, 0.5, -17),
+        BackgroundColor3 = C.row,
+        Text = "DARK MOON",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        TextColor3 = C.ACCENT,
+        AutoButtonColor = false,
+        BorderSizePixel = 0,
+        ZIndex = 10
+    }, gui)
+    corner(toggleButton, 8)
+    outline(toggleButton)
 
     local scale = make("UIScale", {Scale = 1}, window)
     local baseScale = 1
@@ -1946,9 +1970,10 @@ local function Main()
     buttonRow(homeRight, 2, "GRAB GUN", C.row, Actions.GrabGun)
     buttonRow(homeRight, 3, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
     buttonRow(homeRight, 4, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
-    buttonRow(homeRight, 5, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
-    buttonRow(homeRight, 6, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
-    buttonRow(homeRight, 7, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
+    buttonRow(homeRight, 5, "COPY DISCORD INVITE", C.row, Actions.CopyDiscordInvite)
+    buttonRow(homeRight, 6, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
+    buttonRow(homeRight, 7, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
+    buttonRow(homeRight, 8, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
 
     -- 2. COMBAT TAB
     local combatTab = newTab("Combat", 2)
@@ -2094,20 +2119,19 @@ local function Main()
     ctrls.JumpValue = sliderRow(miscLeft, 4, "Jump Power", 50, 100, Config.JumpValue, "", function(v) Config.JumpValue = v end)
     ctrls.InfiniteJump = toggleRow(miscLeft, 5, "Infinite Jump", "Jump mid-air with Space", nil, function(v) Config.InfiniteJump = v end, Config.InfiniteJump)
     ctrls.Noclip = toggleRow(miscLeft, 6, "Noclip", "Walk through parts", nil, function(v) Config.Noclip = v end, Config.Noclip)
-    ctrls.Fly = toggleRow(miscLeft, 7, "Fly Toggle", "Stores Fly state in Config", nil, function(v) Config.Fly = v end, Config.Fly)
-    ctrls.FlySpeed = sliderRow(miscLeft, 8, "Fly Speed", 10, 100, Config.FlySpeed, "", function(v) Config.FlySpeed = v end)
-    ctrls.Fullbright = toggleRow(miscLeft, 9, "Fullbright", "Eliminates darkness", nil, function(v)
+    ctrls.FlySpeed = sliderRow(miscLeft, 7, "Fly Speed", 10, 100, Config.FlySpeed, "", function(v) Config.FlySpeed = v end)
+    ctrls.Fullbright = toggleRow(miscLeft, 8, "Fullbright", "Eliminates darkness", nil, function(v)
         Config.Fullbright = v
         if not v then
             Lighting.Ambient = Color3.fromRGB(128, 128, 128)
             Lighting.Brightness = 1
         end
     end, Config.Fullbright)
-    ctrls.NoFog = toggleRow(miscLeft, 10, "Remove Fog", "Clears distance fog", nil, function(v)
+    ctrls.NoFog = toggleRow(miscLeft, 9, "Remove Fog", "Clears distance fog", nil, function(v)
         Config.NoFog = v
         if not v then Lighting.FogEnd = 1000 end
     end, Config.NoFog)
-    ctrls.DisableParticles = toggleRow(miscLeft, 11, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
+    ctrls.DisableParticles = toggleRow(miscLeft, 10, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
 
     ctrls.AntiFling = toggleRow(miscRight, 1, "Anti-Fling", "Blocks player collisions & flings", nil, function(v) Config.AntiFling = v end, Config.AntiFling)
     ctrls.AntiVoid = toggleRow(miscRight, 2, "Anti-Void", "Recovers when falling into void", nil, function(v) Config.AntiVoid = v end, Config.AntiVoid)
@@ -2343,6 +2367,10 @@ local function Main()
 
     closeBtn.MouseButton1Click:Connect(function()
         setOpen(false)
+    end)
+
+    toggleButton.MouseButton1Click:Connect(function()
+        setOpen(not isOpen)
     end)
 
     searchBox:GetPropertyChangedSignal("Text"):Connect(applySearchFilter)
@@ -3021,6 +3049,9 @@ local function Main()
             end
         end
         originalHitboxSizes = {}
+        if toggleButton and toggleButton.Parent then
+            pcall(function() toggleButton:Destroy() end)
+        end
         if gui and gui.Parent then
             pcall(function() gui:Destroy() end)
         end
