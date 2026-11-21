@@ -23,7 +23,6 @@ local TeleportService = game:GetService("TeleportService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextChatService = game:GetService("TextChatService")
 local MarketplaceService = game:GetService("MarketplaceService")
-local Stats = game:GetService("Stats")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -36,6 +35,7 @@ local Config = {
     AnnounceRoles = false,
 
     AutoShoot = false,
+    Wallbang = false,
     SilentAim = false,
     AimPrediction = true,
     PingComp = true,
@@ -224,12 +224,6 @@ local originalHitboxSizes = {}
 local isFlinging = false
 local selectedFlingPlayerName = nil
 
-local aimAccuracyStats = {
-    attempts = 0,
-    lockedHits = 0,
-    lastHitPct = 100
-}
-
 local function fireTouch(part1, part2)
     if firetouchinterest and part1 and part2 then
         local ft = firetouchinterest
@@ -302,11 +296,7 @@ end
 
 local function getAimPart(char)
     if not char then return nil end
-    local head = char:FindFirstChild("Head")
-    if head and head:IsA("BasePart") then
-        return head
-    end
-    return getRootPart(char)
+    return char:FindFirstChild("Head") or getRootPart(char)
 end
 
 local function getHumanoid(char)
@@ -470,63 +460,58 @@ local function getKnifeOriginPart(knife, root)
     return root
 end
 
-local function getLivePingSeconds()
-    local pingSec = 0.08
-    pcall(function()
-        local net = Stats and Stats:FindFirstChild("Network")
-        local pingItem = net and net:FindFirstChild("ServerStatsItem") and net.ServerStatsItem:FindFirstChild("Data Ping")
-        if pingItem and pingItem.GetValue then
-            local ms = pingItem:GetValue()
-            if type(ms) == "number" and ms > 0 and ms < 2500 then
-                pingSec = math.clamp(ms / 1000, 0.015, 0.65)
-            end
-        end
-    end)
-    return pingSec
-end
-
-local accuracyRowRef = nil
-
-local function recordAimAccuracy(lockedTargetPos, aimPos)
-    aimAccuracyStats.attempts = aimAccuracyStats.attempts + 1
-    local withinTolerance = false
-    if lockedTargetPos and aimPos then
-        local offset = (lockedTargetPos - aimPos).Magnitude
-        withinTolerance = offset <= 5.5
-    end
-    if withinTolerance then
-        aimAccuracyStats.lockedHits = aimAccuracyStats.lockedHits + 1
-    end
-    local pct = math.clamp(
-        math.floor(((aimAccuracyStats.lockedHits / math.max(aimAccuracyStats.attempts, 1)) * 1000) + 0.5) / 10,
-        0,
-        100
-    )
-    aimAccuracyStats.lastHitPct = pct
-    if accuracyRowRef and accuracyRowRef.SetValue then
-        accuracyRowRef.SetValue(string.format("%.1f%% (%d/%d)", pct, aimAccuracyStats.lockedHits, aimAccuracyStats.attempts))
-    end
-end
-
-local function computePredictedAimPos(targetPart, fallbackRoot, originPos, projectileSpeed)
+local function computePredictedAimPos(targetPart, fallbackRoot)
     local anchor = targetPart or fallbackRoot
     if not anchor then return nil end
     local pos = anchor.Position
     if Config.AimPrediction then
         local velSource = fallbackRoot or anchor
         local vel = (velSource:IsA("BasePart") and velSource.AssemblyLinearVelocity) or Vector3.zero
-        local speedMag = vel.Magnitude
-        if speedMag > 0.25 then
-            local dist = originPos and (pos - originPos).Magnitude or 30
-            local flightTime = dist / math.max(projectileSpeed or 140, 40)
-            local pingLead = Config.PingComp and getLivePingSeconds() or 0.04
-            local totalLead = math.clamp(flightTime + pingLead + 0.035, 0.02, 0.55)
-            pos = pos + (vel * totalLead)
-        elseif Config.PingComp then
-            pos = pos + (vel * (getLivePingSeconds() * 0.5))
-        end
+        local lead = Config.PingComp and 0.16 or 0.12
+        pos = pos + (vel * lead)
     end
     return pos
+end
+
+local function hasLineOfSight(originPos, targetPos, ignoreInstances)
+    if not originPos or not targetPos then return true end
+    local delta = targetPos - originPos
+    if delta.Magnitude <= 0.01 then return true end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local filterList = {}
+    if LocalPlayer and LocalPlayer.Character then
+        table.insert(filterList, LocalPlayer.Character)
+    end
+    if espFolder then
+        table.insert(filterList, espFolder)
+    end
+    if ignoreInstances then
+        for _, inst in ipairs(ignoreInstances) do
+            if inst then
+                table.insert(filterList, inst)
+            end
+        end
+    end
+    params.FilterDescendantsInstances = filterList
+
+    local ok, result = pcall(function()
+        return Workspace:Raycast(originPos, delta, params)
+    end)
+    if not ok then
+        return true
+    end
+    if not result then
+        return true
+    end
+
+    local hitPart = result.Instance
+    if hitPart and (hitPart.Transparency >= 0.95 or not hitPart.CanCollide) then
+        return true
+    end
+
+    return false
 end
 
 local function fireGunAtTarget(gun, root, targetChar)
@@ -539,14 +524,16 @@ local function fireGunAtTarget(gun, root, targetChar)
     local targetAnchor = tAim or tRoot
     if not targetAnchor then return false end
 
+    local aimPos = computePredictedAimPos(targetAnchor, tRoot) or targetAnchor.Position
     local rayAtt = root:FindFirstChild("GunRaycastAttachment")
     local handle = gun:FindFirstChild("Handle")
     local originCF = (rayAtt and rayAtt.WorldCFrame)
         or (handle and handle:IsA("BasePart") and handle.CFrame)
         or root.CFrame
 
-    local aimPos = computePredictedAimPos(targetAnchor, tRoot, originCF.Position, 220) or targetAnchor.Position
-    recordAimAccuracy(targetAnchor.Position, aimPos)
+    if not Config.Wallbang and not hasLineOfSight(originCF.Position, aimPos, {targetChar, gun}) then
+        return false
+    end
 
     local ok = false
     if shootRemote:IsA("RemoteEvent") then
@@ -570,9 +557,8 @@ local function fireGunAtTarget(gun, root, targetChar)
     return ok
 end
 
-local function fireKnifeThrowRemote(remote, originCF, targetPos, rawTargetPos)
+local function fireKnifeThrowRemote(remote, originCF, targetPos)
     if not remote or not originCF or not targetPos then return false end
-    recordAimAccuracy(rawTargetPos or targetPos, targetPos)
     local targetCF = CFrame.new(targetPos)
     local ok = false
 
@@ -1364,40 +1350,20 @@ function Actions.Unload()
     end
 end
 
-local function selectSilentTarget(preferMurderer)
+local function getClosestKnifeTarget()
     local char = LocalPlayer.Character
     local root = getRootPart(char)
     if not root then return nil end
 
-    if preferMurderer then
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and isPlayerAlive(p) and p.Character and getPlayerRole(p) == "Murderer" then
-                local aimPart = getAimPart(p.Character)
-                local tRoot = getRootPart(p.Character)
-                if aimPart or tRoot then
-                    local worldPos = (aimPart or tRoot).Position
-                    local screenPos, onScreen = Camera:WorldToViewportPoint(worldPos)
-                    if not Config.ShowFOV or screenPos.Z <= 0 then
-                        return p
-                    end
-                    local center = Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y * 0.5)
-                    local sDist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-                    if onScreen and sDist <= Config.FOVRadius then
-                        return p
-                    end
-                end
-            end
-        end
-    end
-
+    local cam = Workspace.CurrentCamera
     local anchorScreen = Config.ShowFOV
-        and Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y * 0.5)
+        and Vector2.new(cam.ViewportSize.X * 0.5, cam.ViewportSize.Y * 0.5)
         or UserInputService:GetMouseLocation()
 
-    local bestCandidate = nil
-    local bestScore = math.huge
-    local fallbackWorldTarget = nil
-    local fallbackWorldDist = math.huge
+    local bestFovTarget = nil
+    local bestFovDist = math.huge
+    local bestWorldTarget = nil
+    local bestWorldDist = math.huge
 
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
@@ -1406,21 +1372,18 @@ local function selectSilentTarget(preferMurderer)
             if aimPart or tRoot then
                 local worldPos = (aimPart or tRoot).Position
                 local worldDist = (root.Position - worldPos).Magnitude
-                if worldDist < fallbackWorldDist then
-                    fallbackWorldDist = worldDist
-                    fallbackWorldTarget = p
+                if worldDist < bestWorldDist then
+                    bestWorldDist = worldDist
+                    bestWorldTarget = p
                 end
 
-                local screenPos, onScreen = Camera:WorldToViewportPoint(worldPos)
+                local screenPos, onScreen = cam:WorldToViewportPoint(worldPos)
                 if screenPos.Z > 0 then
                     local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - anchorScreen).Magnitude
-                    if (not Config.ShowFOV or screenDist <= Config.FOVRadius) and (onScreen or not Config.ShowFOV) then
-                        local visPenalty = onScreen and 0 or 85
-                        local distPenalty = worldDist * 0.25
-                        local score = screenDist + visPenalty + distPenalty
-                        if score < bestScore then
-                            bestScore = score
-                            bestCandidate = p
+                    if (not Config.ShowFOV or screenDist <= Config.FOVRadius) and screenDist < bestFovDist then
+                        if onScreen or not Config.ShowFOV then
+                            bestFovDist = screenDist
+                            bestFovTarget = p
                         end
                     end
                 end
@@ -1428,15 +1391,29 @@ local function selectSilentTarget(preferMurderer)
         end
     end
 
-    return bestCandidate or fallbackWorldTarget
-end
-
-local function getClosestKnifeTarget()
-    return selectSilentTarget(false)
+    return bestFovTarget or bestWorldTarget
 end
 
 local function getBestGunTarget()
-    return selectSilentTarget(true)
+    local murderer = nil
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and isPlayerAlive(p) and getPlayerRole(p) == "Murderer" then
+            murderer = p
+            break
+        end
+    end
+    if murderer and murderer.Character then
+        local char = LocalPlayer.Character
+        local root = char and getRootPart(char)
+        local tAim = getAimPart(murderer.Character) or getRootPart(murderer.Character)
+        if not Config.Wallbang and root and tAim then
+            if not hasLineOfSight(root.Position, tAim.Position, {murderer.Character}) then
+                return nil
+            end
+        end
+        return murderer
+    end
+    return getClosestKnifeTarget()
 end
 
 local silentAimHookActive = true
@@ -1457,13 +1434,8 @@ if hookmetamethod and getnamecallmethod then
                 if target and target.Character then
                     local tRoot = getRootPart(target.Character)
                     local tAim = getAimPart(target.Character)
-                    local anchor = tAim or tRoot
-                    local originPos = (typeof(args[1]) == "CFrame" and args[1].Position)
-                        or (typeof(args[1]) == "Vector3" and args[1])
-                        or (getRootPart(LocalPlayer.Character) and getRootPart(LocalPlayer.Character).Position)
-                    local targetPos = computePredictedAimPos(anchor, tRoot, originPos, 155)
+                    local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
                     if targetPos then
-                        recordAimAccuracy(anchor and anchor.Position, targetPos)
                         if typeof(args[2]) == "CFrame" then
                             args[2] = CFrame.new(targetPos)
                         elseif typeof(args[2]) == "Vector3" then
@@ -1479,19 +1451,14 @@ if hookmetamethod and getnamecallmethod then
                         return oldNamecall(self, unpack(args))
                     end
                 end
-            elseif isGunShootRemote and Config.SilentAim then
+            elseif isGunShootRemote and (Config.SilentAim or Config.Wallbang) then
                 local args = {...}
                 local target = getBestGunTarget()
                 if target and target.Character then
                     local tRoot = getRootPart(target.Character)
                     local tAim = getAimPart(target.Character)
-                    local anchor = tAim or tRoot
-                    local originPos = (typeof(args[1]) == "CFrame" and args[1].Position)
-                        or (typeof(args[1]) == "Vector3" and args[1])
-                        or (getRootPart(LocalPlayer.Character) and getRootPart(LocalPlayer.Character).Position)
-                    local targetPos = computePredictedAimPos(anchor, tRoot, originPos, 220)
+                    local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
                     if targetPos then
-                        recordAimAccuracy(anchor and anchor.Position, targetPos)
                         if typeof(args[2]) == "CFrame" then
                             args[2] = CFrame.new(targetPos)
                         elseif typeof(args[2]) == "Vector3" then
@@ -2555,10 +2522,10 @@ local function Main()
     local combatRight = column(combatTab, 0.5, 0.5, "MURDERER, KNIFE & HITBOX")
 
     ctrls.AutoShoot = toggleRow(combatLeft, 1, "Auto Shoot Murderer", "Fires revolver at Murderer", nil, function(v) Config.AutoShoot = v end, Config.AutoShoot)
-    ctrls.SilentAim = toggleRow(combatLeft, 2, "Silent Aim", "High-accuracy ballistic redirect", nil, function(v) Config.SilentAim = v end, Config.SilentAim)
-    ctrls.AimPrediction = toggleRow(combatLeft, 3, "Aim Prediction", "Velocity + flight-time lead", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
-    ctrls.PingComp = toggleRow(combatLeft, 4, "Ping Compensation", "Live network ping lead", nil, function(v) Config.PingComp = v end, Config.PingComp)
-    accuracyRowRef = infoRow(combatLeft, 5, "Silent Accuracy", "100.0% (0/0)", C.good)
+    ctrls.Wallbang = toggleRow(combatLeft, 2, "Wallbang", "Fires through walls and obstacles", nil, function(v) Config.Wallbang = v end, Config.Wallbang)
+    ctrls.SilentAim = toggleRow(combatLeft, 3, "Silent Aim", "Redirects gun/knife raycast to target", nil, function(v) Config.SilentAim = v end, Config.SilentAim)
+    ctrls.AimPrediction = toggleRow(combatLeft, 4, "Aim Prediction", "Compensates for target velocity", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
+    ctrls.PingComp = toggleRow(combatLeft, 5, "Ping Compensation", "Adjusts lead time for ping", nil, function(v) Config.PingComp = v end, Config.PingComp)
     ctrls.SingleShot = toggleRow(combatLeft, 6, "Single Shot Lock", "Fires one verified shot then stops", nil, function(v) Config.SingleShot = v end, Config.SingleShot)
     ctrls.AutoEquipGun = toggleRow(combatLeft, 7, "Auto Equip Gun", "Pulls out revolver when needed", nil, function(v) Config.AutoEquipGun = v end, Config.AutoEquipGun)
     ctrls.GrabGunAuto = toggleRow(combatLeft, 8, "Full Gun Grabber", "Automatically picks up dropped gun", nil, function(v) Config.GrabGunAuto = v end, Config.GrabGunAuto)
@@ -2569,7 +2536,7 @@ local function Main()
     ctrls.KillAura = toggleRow(combatRight, 1, "Kill Aura", "Strikes players inside aura reach", nil, function(v) Config.KillAura = v end, Config.KillAura)
     ctrls.AutoKill = toggleRow(combatRight, 2, "Auto Kill Innocents", "Eliminates targets with knife", nil, function(v) Config.AutoKill = v end, Config.AutoKill)
     ctrls.KillMode = dropdownRow(combatRight, 3, "Kill Mode", {"Legit", "Blatant", "Throw"}, Config.KillMode, function(v) Config.KillMode = v end)
-    ctrls.KnifeSilentAim = toggleRow(combatRight, 4, "Knife Silent Aim", "High-accuracy knife redirect", nil, function(v) Config.KnifeSilentAim = v end, Config.KnifeSilentAim)
+    ctrls.KnifeSilentAim = toggleRow(combatRight, 4, "Knife Silent Aim", "Redirects thrown knives to target", nil, function(v) Config.KnifeSilentAim = v end, Config.KnifeSilentAim)
     ctrls.AutoSilentKnife = toggleRow(combatRight, 5, "Auto Silent Knife Throw", "Automatically throws knife silently at target", nil, function(v) Config.AutoSilentKnife = v end, Config.AutoSilentKnife)
     ctrls.KillAll = toggleRow(combatRight, 6, "Kill All (No Limit)", "Hits all living players in range", nil, function(v) Config.KillAll = v end, Config.KillAll)
     ctrls.AuraRange = sliderRow(combatRight, 7, "Aura Range", 5, 45, Config.AuraRange, " studs", function(v) Config.AuraRange = v end)
@@ -3561,12 +3528,11 @@ local function Main()
                             if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
                                 local tRoot = getRootPart(p.Character)
                                 local tAim = getAimPart(p.Character)
-                                local anchor = tAim or tRoot
-                                if tRoot and anchor then
+                                if tRoot then
                                     local d = (root.Position - tRoot.Position).Magnitude
                                     if Config.AutoSilentKnife or d <= Config.AuraRange then
-                                        local targetPos = computePredictedAimPos(anchor, tRoot, originCF.Position, 155)
-                                        if fireKnifeThrowRemote(throwRemote, originCF, targetPos, anchor.Position) then
+                                        local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
+                                        if fireKnifeThrowRemote(throwRemote, originCF, targetPos) then
                                             threwAny = true
                                         end
                                     end
@@ -3581,12 +3547,11 @@ local function Main()
                         if target and target.Character then
                             local tRoot = getRootPart(target.Character)
                             local tAim = getAimPart(target.Character)
-                            local anchor = tAim or tRoot
-                            if tRoot and anchor then
+                            if tRoot then
                                 local d = (root.Position - tRoot.Position).Magnitude
                                 if Config.AutoSilentKnife or d <= Config.AuraRange then
-                                    local targetPos = computePredictedAimPos(anchor, tRoot, originCF.Position, 155)
-                                    if fireKnifeThrowRemote(throwRemote, originCF, targetPos, anchor.Position) then
+                                    local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
+                                    if fireKnifeThrowRemote(throwRemote, originCF, targetPos) then
                                         lastKnifeTick = now
                                     end
                                 end
