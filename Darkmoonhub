@@ -293,6 +293,11 @@ local function getRootPart(char)
     return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso") or char:FindFirstChildWhichIsA("BasePart")
 end
 
+local function getAimPart(char)
+    if not char then return nil end
+    return char:FindFirstChild("Head") or getRootPart(char)
+end
+
 local function getHumanoid(char)
     if not char then return nil end
     return char:FindFirstChildOfClass("Humanoid")
@@ -394,12 +399,15 @@ local function getKnifeOriginPart(knife, root)
     return root
 end
 
-local function computeKnifeAimPos(targetRoot)
-    if not targetRoot then return nil end
-    local pos = targetRoot.Position
+local function computePredictedAimPos(targetPart, fallbackRoot)
+    local anchor = targetPart or fallbackRoot
+    if not anchor then return nil end
+    local pos = anchor.Position
     if Config.AimPrediction then
+        local velSource = fallbackRoot or anchor
+        local vel = (velSource:IsA("BasePart") and velSource.AssemblyLinearVelocity) or Vector3.zero
         local lead = Config.PingComp and 0.16 or 0.12
-        pos = pos + (targetRoot.AssemblyLinearVelocity * lead)
+        pos = pos + (vel * lead)
     end
     return pos
 end
@@ -661,11 +669,12 @@ function Actions.ShootMurderer()
 
     local root = getRootPart(char)
     local mRoot = getRootPart(murderer.Character)
+    local mAim = getAimPart(murderer.Character)
     if root and mRoot and gun:FindFirstChild("Shoot") then
         local rayAtt = root:FindFirstChild("GunRaycastAttachment")
         local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
-        local targetCF = CFrame.new(mRoot.Position)
-        gun.Shoot:FireServer(origin, targetCF)
+        local aimPos = computePredictedAimPos(mAim or mRoot, mRoot) or mRoot.Position
+        gun.Shoot:FireServer(origin, CFrame.new(aimPos))
         SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")!", 2)
     end
 end
@@ -872,7 +881,7 @@ function Actions.TeleportLocation2()
     end
 end
 
--- FLING V2 ENGINE
+-- FLING V3 ENGINE
 local function flingCharacter(targetChar)
     if isFlinging then return end
     local char = LocalPlayer.Character
@@ -886,18 +895,23 @@ local function flingCharacter(targetChar)
 
     isFlinging = true
     local oldCF = root.CFrame
+    local hasValidOldCF = (oldCF.Position - Vector3.zero).Magnitude > 1
     local oldState = hum:GetState()
-    local power = math.max(tonumber(Config.FlingPower) or 110, 25)
-    local spinVel = math.max(power * 320, 40000)
-    local launchMag = math.max(power * 135, 14000)
+    local power = math.max(tonumber(Config.FlingPower) or 110, 30)
+    local spinVel = math.max(power * 380, 48000)
+    local launchMag = math.max(power * 165, 18000)
 
-    if sethiddenproperty then
-        pcall(sethiddenproperty, LocalPlayer, "SimulationRadius", math.huge)
-        pcall(sethiddenproperty, LocalPlayer, "MaxSimulationRadius", math.huge)
+    local function refreshSimulation()
+        if sethiddenproperty then
+            pcall(sethiddenproperty, LocalPlayer, "SimulationRadius", math.huge)
+            pcall(sethiddenproperty, LocalPlayer, "MaxSimulationRadius", math.huge)
+        end
+        if setsimulationradius then
+            pcall(setsimulationradius, math.huge, math.huge)
+        end
     end
-    if setsimulationradius then
-        pcall(setsimulationradius, math.huge, math.huge)
-    end
+
+    refreshSimulation()
 
     for _, obj in ipairs(root:GetChildren()) do
         if obj:IsA("BodyMover") or obj:IsA("Constraint") then
@@ -913,14 +927,14 @@ local function flingCharacter(targetChar)
 
     local bAV = Instance.new("BodyAngularVelocity")
     bAV.Name = "FlingTorque"
-    bAV.AngularVelocity = Vector3.new(spinVel * 0.85, spinVel * 1.85, spinVel * 0.85)
+    bAV.AngularVelocity = Vector3.new(spinVel * 0.9, spinVel * 2.1, spinVel * 0.9)
     bAV.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
     bAV.P = 1e9
     bAV.Parent = root
 
     local bV = Instance.new("BodyVelocity")
     bV.Name = "FlingVelocity"
-    bV.Velocity = Vector3.new(0, launchMag * 0.8, 0)
+    bV.Velocity = Vector3.new(0, launchMag, 0)
     bV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bV.P = 1e9
     bV.Parent = root
@@ -936,7 +950,7 @@ local function flingCharacter(targetChar)
         end
         if targetChar and targetChar.Parent then
             for _, tChild in ipairs(targetChar:GetDescendants()) do
-                if tChild:IsA("BasePart") then
+                if tChild:IsA("BasePart") and tChild.Name ~= "HumanoidRootPart" then
                     tChild.CanCollide = false
                 end
             end
@@ -944,7 +958,8 @@ local function flingCharacter(targetChar)
     end)
 
     local startTime = tick()
-    local duration = 1.85
+    local duration = 2.0
+    local simTick = 0
 
     while tick() - startTime < duration do
         if not targetChar or not targetChar.Parent or not tRoot or not tRoot.Parent or tHum.Health <= 0 then
@@ -954,49 +969,54 @@ local function flingCharacter(targetChar)
             break
         end
 
+        simTick = simTick + 1
+        if simTick % 12 == 0 then
+            refreshSimulation()
+        end
+
         local elapsed = tick() - startTime
         local style = Config.FlingStyle
         local targetVel = tRoot.AssemblyLinearVelocity or Vector3.zero
-        local leadPos = tRoot.Position + (targetVel * 0.18)
+        local leadPos = tRoot.Position + (targetVel * 0.14)
 
         if style == "Velocity" then
-            local surgeX = math.sin(elapsed * 42) * launchMag
-            local surgeZ = math.cos(elapsed * 42) * launchMag
-            local surgeY = launchMag * (0.9 + 0.35 * math.sin(elapsed * 24))
-            root.CFrame = CFrame.new(leadPos + Vector3.new(0, 0.25, 0))
+            local surgeX = math.sin(elapsed * 46) * launchMag
+            local surgeZ = math.cos(elapsed * 46) * launchMag
+            local surgeY = launchMag * (0.95 + 0.35 * math.sin(elapsed * 26))
+            root.CFrame = CFrame.new(leadPos + Vector3.new(0, math.sin(elapsed * 30) * 0.35, 0))
             bV.Velocity = Vector3.new(surgeX, surgeY, surgeZ)
             root.AssemblyLinearVelocity = bV.Velocity
-            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.4, spinVel)
+            root.AssemblyAngularVelocity = Vector3.new(spinVel * 1.1, spinVel * 1.6, spinVel * 1.1)
         elseif style == "Torque" then
             local snap = Vector3.new(
-                math.sin(elapsed * 55) * 0.55,
-                math.cos(elapsed * 48) * 0.4,
-                math.cos(elapsed * 55) * 0.55
+                math.sin(elapsed * 60) * 0.45,
+                math.cos(elapsed * 52) * 0.35,
+                math.cos(elapsed * 60) * 0.45
             )
-            root.CFrame = CFrame.new(leadPos + snap) * CFrame.Angles(elapsed * 22, elapsed * 34, elapsed * 18)
+            root.CFrame = CFrame.new(leadPos + snap) * CFrame.Angles(elapsed * 26, elapsed * 38, elapsed * 22)
             bV.Velocity = Vector3.new(
-                math.cos(elapsed * 38) * launchMag * 0.95,
-                launchMag * 1.05,
-                math.sin(elapsed * 38) * launchMag * 0.95
+                math.cos(elapsed * 42) * launchMag,
+                launchMag * 1.1,
+                math.sin(elapsed * 42) * launchMag
             )
             root.AssemblyLinearVelocity = bV.Velocity
-            root.AssemblyAngularVelocity = Vector3.new(spinVel * 1.2, spinVel * 2.0, spinVel * 1.2)
+            root.AssemblyAngularVelocity = Vector3.new(spinVel * 1.3, spinVel * 2.2, spinVel * 1.3)
         else
-            local angle = elapsed * 34
-            local radius = 1.35
+            local angle = elapsed * 38
+            local radius = 1.15
             local orbitOffset = Vector3.new(
                 math.cos(angle) * radius,
-                math.sin(elapsed * 22) * 0.9,
+                math.sin(elapsed * 24) * 0.75,
                 math.sin(angle) * radius
             )
             root.CFrame = CFrame.new(leadPos + orbitOffset, leadPos)
             bV.Velocity = Vector3.new(
-                math.cos(angle) * launchMag * 1.1,
-                launchMag,
-                math.sin(angle) * launchMag * 1.1
+                math.cos(angle) * launchMag * 1.15,
+                launchMag * 1.05,
+                math.sin(angle) * launchMag * 1.15
             )
             root.AssemblyLinearVelocity = bV.Velocity
-            root.AssemblyAngularVelocity = Vector3.new(spinVel, spinVel * 1.75, spinVel)
+            root.AssemblyAngularVelocity = Vector3.new(spinVel * 1.1, spinVel * 1.9, spinVel * 1.1)
         end
 
         RunService.Heartbeat:Wait()
@@ -1009,7 +1029,9 @@ local function flingCharacter(targetChar)
     if root and root.Parent then
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
-        root.CFrame = oldCF
+        if hasValidOldCF then
+            root.CFrame = oldCF
+        end
     end
     if char and char.Parent then
         for _, child in ipairs(char:GetDescendants()) do
@@ -1024,7 +1046,7 @@ local function flingCharacter(targetChar)
         end)
     end
 
-    task.wait(0.12)
+    task.wait(0.1)
     isFlinging = false
 end
 
@@ -1037,10 +1059,10 @@ function Actions.FlingMurderer()
         end
     end
     if murderer and murderer.Character then
-        SendNotification("Fling V2", "Flinging Murderer (" .. murderer.Name .. ")...", 2)
+        SendNotification("Fling V3", "Flinging Murderer (" .. murderer.Name .. ")...", 2)
         task.spawn(flingCharacter, murderer.Character)
     else
-        SendNotification("Fling V2", "Murderer not found or dead.", 2)
+        SendNotification("Fling V3", "Murderer not found or dead.", 2)
     end
 end
 
@@ -1053,24 +1075,24 @@ function Actions.FlingSheriff()
         end
     end
     if sheriff and sheriff.Character then
-        SendNotification("Fling V2", "Flinging Sheriff (" .. sheriff.Name .. ")...", 2)
+        SendNotification("Fling V3", "Flinging Sheriff (" .. sheriff.Name .. ")...", 2)
         task.spawn(flingCharacter, sheriff.Character)
     else
-        SendNotification("Fling V2", "Sheriff not found or dead.", 2)
+        SendNotification("Fling V3", "Sheriff not found or dead.", 2)
     end
 end
 
 function Actions.FlingSelectedPlayer()
     if not selectedFlingPlayerName or selectedFlingPlayerName == "None" then
-        SendNotification("Fling V2", "Select a player from the Fling Player List first.", 2)
+        SendNotification("Fling V3", "Select a player from the Fling Player List first.", 2)
         return
     end
     local targetPlayer = Players:FindFirstChild(selectedFlingPlayerName)
     if targetPlayer and targetPlayer ~= LocalPlayer and targetPlayer.Character and isPlayerAlive(targetPlayer) then
-        SendNotification("Fling V2", "Flinging " .. targetPlayer.Name .. "...", 2)
+        SendNotification("Fling V3", "Flinging " .. targetPlayer.Name .. "...", 2)
         task.spawn(flingCharacter, targetPlayer.Character)
     else
-        SendNotification("Fling V2", "Selected player not found or dead.", 2)
+        SendNotification("Fling V3", "Selected player not found or dead.", 2)
         RefreshFlingPlayerList()
     end
 end
@@ -1192,41 +1214,57 @@ local function getClosestKnifeTarget()
     local root = getRootPart(char)
     if not root then return nil end
 
-    local mousePos = UserInputService:GetMouseLocation()
-    local bestTarget = nil
-    local bestDist = math.huge
+    local cam = Workspace.CurrentCamera
+    local anchorScreen = Config.ShowFOV
+        and Vector2.new(cam.ViewportSize.X * 0.5, cam.ViewportSize.Y * 0.5)
+        or UserInputService:GetMouseLocation()
+
+    local bestFovTarget = nil
+    local bestFovDist = math.huge
+    local bestWorldTarget = nil
+    local bestWorldDist = math.huge
 
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
+            local aimPart = getAimPart(p.Character)
             local tRoot = getRootPart(p.Character)
-            if tRoot then
-                local screenPos = Camera:WorldToViewportPoint(tRoot.Position)
-                local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                if (not Config.ShowFOV or dist <= Config.FOVRadius) and dist < bestDist then
-                    bestDist = dist
-                    bestTarget = p
+            if aimPart or tRoot then
+                local worldPos = (aimPart or tRoot).Position
+                local worldDist = (root.Position - worldPos).Magnitude
+                if worldDist < bestWorldDist then
+                    bestWorldDist = worldDist
+                    bestWorldTarget = p
                 end
-            end
-        end
-    end
 
-    if not bestTarget then
-        local minDist = math.huge
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
-                local tRoot = getRootPart(p.Character)
-                if tRoot then
-                    local d = (root.Position - tRoot.Position).Magnitude
-                    if d < minDist then
-                        minDist = d
-                        bestTarget = p
+                local screenPos, onScreen = cam:WorldToViewportPoint(worldPos)
+                if screenPos.Z > 0 then
+                    local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - anchorScreen).Magnitude
+                    if (not Config.ShowFOV or screenDist <= Config.FOVRadius) and screenDist < bestFovDist then
+                        if onScreen or not Config.ShowFOV then
+                            bestFovDist = screenDist
+                            bestFovTarget = p
+                        end
                     end
                 end
             end
         end
     end
 
-    return bestTarget
+    return bestFovTarget or bestWorldTarget
+end
+
+local function getBestGunTarget()
+    local murderer = nil
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and isPlayerAlive(p) and getPlayerRole(p) == "Murderer" then
+            murderer = p
+            break
+        end
+    end
+    if murderer and murderer.Character then
+        return murderer
+    end
+    return getClosestKnifeTarget()
 end
 
 local silentAimHookActive = true
@@ -1245,43 +1283,35 @@ if hookmetamethod and getnamecallmethod then
                 local target = getClosestKnifeTarget()
                 if target and target.Character then
                     local tRoot = getRootPart(target.Character)
-                    if tRoot then
-                        local targetPos = computeKnifeAimPos(tRoot)
-                        if targetPos then
-                            if typeof(args[2]) == "CFrame" then
-                                args[2] = CFrame.new(targetPos)
-                            elseif typeof(args[2]) == "Vector3" then
-                                args[2] = targetPos
-                            elseif typeof(args[1]) == "CFrame" then
-                                args[1] = CFrame.new(targetPos)
-                            elseif typeof(args[1]) == "Vector3" then
-                                args[1] = targetPos
-                            else
-                                args[2] = CFrame.new(targetPos)
-                            end
-                            if setnamecallmethod then setnamecallmethod(method) end
-                            return oldNamecall(self, unpack(args))
+                    local tAim = getAimPart(target.Character)
+                    local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
+                    if targetPos then
+                        if typeof(args[2]) == "CFrame" then
+                            args[2] = CFrame.new(targetPos)
+                        elseif typeof(args[2]) == "Vector3" then
+                            args[2] = targetPos
+                        elseif typeof(args[1]) == "CFrame" then
+                            args[1] = CFrame.new(targetPos)
+                        elseif typeof(args[1]) == "Vector3" then
+                            args[1] = targetPos
+                        else
+                            args[2] = CFrame.new(targetPos)
                         end
+                        if setnamecallmethod then setnamecallmethod(method) end
+                        return oldNamecall(self, unpack(args))
                     end
                 end
             elseif remoteName == "Shoot" and Config.SilentAim then
                 local args = {...}
-                local murderer = nil
-                for _, p in ipairs(Players:GetPlayers()) do
-                    if p ~= LocalPlayer and isPlayerAlive(p) and getPlayerRole(p) == "Murderer" then
-                        murderer = p
-                        break
-                    end
-                end
-                if murderer and murderer.Character then
-                    local mRoot = getRootPart(murderer.Character)
-                    if mRoot then
-                        local targetPos = computeKnifeAimPos(mRoot)
-                        if targetPos then
-                            args[2] = CFrame.new(targetPos)
-                            if setnamecallmethod then setnamecallmethod(method) end
-                            return oldNamecall(self, unpack(args))
-                        end
+                local target = getBestGunTarget()
+                if target and target.Character then
+                    local tRoot = getRootPart(target.Character)
+                    local tAim = getAimPart(target.Character)
+                    local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
+                    if targetPos then
+                        args[2] = CFrame.new(targetPos)
+                        if setnamecallmethod then setnamecallmethod(method) end
+                        return oldNamecall(self, unpack(args))
                     end
                 end
             end
@@ -2454,8 +2484,8 @@ local function Main()
 
     -- 7. TROLLING TAB
     local trollTab = newTab("Trolling", 7)
-    local trollLeft = column(trollTab, 0, 0.5, "FLING V2 TARGETS")
-    local trollRight = column(trollTab, 0.5, 0.5, "FLING V2 SETTINGS")
+    local trollLeft = column(trollTab, 0, 0.5, "FLING V3 TARGETS")
+    local trollRight = column(trollTab, 0.5, 0.5, "FLING V3 SETTINGS")
 
     buttonRow(trollLeft, 1, "FLING MURDERER", C.row, Actions.FlingMurderer)
     buttonRow(trollLeft, 2, "FLING SHERIFF", C.row, Actions.FlingSheriff)
@@ -2467,7 +2497,7 @@ local function Main()
     buttonRow(trollLeft, 4, "FLING SELECTED PLAYER", C.row, Actions.FlingSelectedPlayer)
     buttonRow(trollLeft, 5, "REFRESH PLAYER LIST", C.row, function()
         RefreshFlingPlayerList()
-        SendNotification("Fling V2", "Refreshed fling player list.", 2)
+        SendNotification("Fling V3", "Refreshed fling player list.", 2)
     end)
 
     RefreshFlingPlayerList = function()
@@ -3139,7 +3169,7 @@ local function Main()
             end
         end
 
-        if hum then
+        if hum and not isFlinging then
             if Config.SpeedEnabled then
                 if hum.WalkSpeed ~= Config.SpeedValue then hum.WalkSpeed = Config.SpeedValue end
             else
@@ -3293,18 +3323,20 @@ local function Main()
             end
         end
 
-        if Config.AutoShoot and root and (now - lastShootTick >= 0.5) then
+        if Config.AutoShoot and root and (now - lastShootTick >= 0.45) then
             local bp = LocalPlayer:FindFirstChild("Backpack")
             local gun = (bp and bp:FindFirstChild("Gun")) or (char and char:FindFirstChild("Gun"))
-            if gun and murderer and murderer.Character and isPlayerAlive(murderer) then
-                local mRoot = getRootPart(murderer.Character)
-                if mRoot then
+            local target = getBestGunTarget()
+            if gun and target and target.Character and isPlayerAlive(target) then
+                local tRoot = getRootPart(target.Character)
+                local tAim = getAimPart(target.Character)
+                if tRoot then
                     if hum and bp and gun.Parent == bp then
                         hum:EquipTool(gun)
                     end
                     local rayAtt = root:FindFirstChild("GunRaycastAttachment")
                     local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
-                    local aimPos = computeKnifeAimPos(mRoot) or mRoot.Position
+                    local aimPos = computePredictedAimPos(tAim or tRoot, tRoot) or tRoot.Position
                     if gun:FindFirstChild("Shoot") then
                         gun.Shoot:FireServer(origin, CFrame.new(aimPos))
                         lastShootTick = now
@@ -3337,10 +3369,11 @@ local function Main()
                         for _, p in ipairs(Players:GetPlayers()) do
                             if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
                                 local tRoot = getRootPart(p.Character)
+                                local tAim = getAimPart(p.Character)
                                 if tRoot then
                                     local d = (root.Position - tRoot.Position).Magnitude
                                     if Config.AutoSilentKnife or d <= Config.AuraRange then
-                                        local targetPos = computeKnifeAimPos(tRoot)
+                                        local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
                                         if fireKnifeThrowRemote(throwRemote, originCF, targetPos) then
                                             threwAny = true
                                         end
@@ -3355,10 +3388,11 @@ local function Main()
                         local target = getClosestKnifeTarget()
                         if target and target.Character then
                             local tRoot = getRootPart(target.Character)
+                            local tAim = getAimPart(target.Character)
                             if tRoot then
                                 local d = (root.Position - tRoot.Position).Magnitude
                                 if Config.AutoSilentKnife or d <= Config.AuraRange then
-                                    local targetPos = computeKnifeAimPos(tRoot)
+                                    local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
                                     if fireKnifeThrowRemote(throwRemote, originCF, targetPos) then
                                         lastKnifeTick = now
                                     end
@@ -3392,7 +3426,7 @@ local function Main()
             end
         end
 
-        if Config.HitboxExpander then
+        if Config.HitboxExpander and not isFlinging then
             for _, p in ipairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and p.Character and isPlayerAlive(p) then
                     local hrp = p.Character:FindFirstChild("HumanoidRootPart")
