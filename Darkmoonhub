@@ -5,7 +5,7 @@
 -- By biyxznd
 -- Discord: https://discord.gg/QxRKp9wNeE
 
--- RIGHT SHIFT = Open / Close Menu | END = Emergency Stop
+-- RIGHT SHIFT = Open / Close Menu | F = Toggle Fly | END = Emergency Stop
 
 if getgenv and getgenv().IdenticalMM2Unload then
     pcall(getgenv().IdenticalMM2Unload)
@@ -95,7 +95,9 @@ local Config = {
     SaveSlot2 = nil,
 
     FlyEnabled = false,
-    FlySpeed = 42,
+    FlySpeed = 48,
+    FlyStyle = "Smooth",
+
     SpeedEnabled = false,
     SpeedValue = 24,
     JumpEnabled = false,
@@ -224,8 +226,6 @@ local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
 local selectedFlingPlayerName = nil
-local touchJoystickVector = Vector2.zero
-local touchVerticalInput = 0
 
 local function fireTouch(part1, part2)
     if firetouchinterest and part1 and part2 then
@@ -346,6 +346,7 @@ local function getGunTool(char)
                     or string.find(lname, "gun", 1, true)
                     or string.find(lname, "revolver", 1, true)
                     or string.find(lname, "pistol", 1, true)
+                    or item:FindFirstChild("Shoot")
                     or item:FindFirstChild("GunScript")
                     or item:FindFirstChild("GunLocal") then
                     return item, container
@@ -362,32 +363,14 @@ local function getGunShootRemote(gun)
     if direct and (direct:IsA("RemoteEvent") or direct:IsA("RemoteFunction")) then
         return direct
     end
-
-    local events = gun:FindFirstChild("Events")
-    if events then
-        local evShoot = events:FindFirstChild("Shoot")
-        if evShoot and (evShoot:IsA("RemoteEvent") or evShoot:IsA("RemoteFunction")) then
-            return evShoot
-        end
-        for _, child in ipairs(events:GetDescendants()) do
-            if (child:IsA("RemoteEvent") or child:IsA("RemoteFunction")) then
-                local lname = string.lower(child.Name)
-                if string.find(lname, "shoot", 1, true) or string.find(lname, "fire", 1, true) then
-                    return child
-                end
-            end
-        end
-    end
-
     for _, desc in ipairs(gun:GetDescendants()) do
-        if (desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction")) then
+        if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
             local lname = string.lower(desc.Name)
             if string.find(lname, "shoot", 1, true) or string.find(lname, "fire", 1, true) then
                 return desc
             end
         end
     end
-
     return nil
 end
 
@@ -475,30 +458,44 @@ local function computePredictedAimPos(targetPart, fallbackRoot)
     return pos
 end
 
-local function fireGunRemote(shootRemote, originCF, aimPos)
-    if not shootRemote or not originCF or not aimPos then return false end
-    local aimCF = CFrame.new(aimPos)
-    local ok = false
-
-    if shootRemote:IsA("RemoteEvent") then
-        ok = pcall(function() shootRemote:FireServer(originCF, aimCF) end)
-        if not ok then
-            ok = pcall(function() shootRemote:FireServer(originCF, aimPos) end)
-        end
-        if not ok then
-            ok = pcall(function() shootRemote:FireServer(aimCF) end)
-        end
-        if not ok then
-            ok = pcall(function() shootRemote:FireServer(aimPos) end)
-        end
-    elseif shootRemote:IsA("RemoteFunction") then
-        ok = pcall(function() shootRemote:InvokeServer(originCF, aimCF) end)
-        if not ok then
-            ok = pcall(function() shootRemote:InvokeServer(originCF, aimPos) end)
-        end
+local function fireGunAtTarget(gun, char, root, hum, target)
+    if not gun or not char or not root or not target or not target.Character then
+        return false
+    end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if hum and bp and gun.Parent == bp then
+        pcall(function() hum:EquipTool(gun) end)
+        task.wait(0.05)
+        gun = (char:FindFirstChild(gun.Name)) or (bp:FindFirstChild(gun.Name)) or gun
     end
 
-    return ok
+    local tRoot = getRootPart(target.Character)
+    local tAim = getAimPart(target.Character)
+    if not tRoot then return false end
+
+    local shootRemote = getGunShootRemote(gun)
+    if not shootRemote then return false end
+
+    local rayAtt = root:FindFirstChild("GunRaycastAttachment")
+    local originCF = (rayAtt and rayAtt.WorldCFrame) or root.CFrame
+    local aimPos = computePredictedAimPos(tAim or tRoot, tRoot) or tRoot.Position
+    local targetCF = CFrame.new(aimPos)
+
+    local fired = false
+    if shootRemote:IsA("RemoteEvent") then
+        fired = pcall(function() shootRemote:FireServer(originCF, targetCF) end)
+        if not fired then
+            fired = pcall(function() shootRemote:FireServer(originCF.Position, aimPos) end)
+        end
+    elseif shootRemote:IsA("RemoteFunction") then
+        fired = pcall(function() shootRemote:InvokeServer(originCF, targetCF) end)
+    end
+
+    if fired and gun.Parent == char then
+        pcall(function() gun:Activate() end)
+    end
+
+    return fired
 end
 
 local function fireKnifeThrowRemote(remote, originCF, targetPos)
@@ -706,11 +703,132 @@ local function interactWithGunDrop(gunPart, gunObj)
     end
 end
 
+-- MOBILE & PC FLY SYSTEM
+local flyBodyVel = nil
+local flyBodyGyro = nil
+local flyVerticalInput = 0
+
+local function cleanupFlyMovers()
+    if flyBodyVel then
+        pcall(function() flyBodyVel:Destroy() end)
+        flyBodyVel = nil
+    end
+    if flyBodyGyro then
+        pcall(function() flyBodyGyro:Destroy() end)
+        flyBodyGyro = nil
+    end
+    flyVerticalInput = 0
+end
+
+local function ensureFlyMovers(root)
+    if not root then return end
+    if not flyBodyVel or not flyBodyVel.Parent or flyBodyVel.Parent ~= root then
+        if flyBodyVel then pcall(function() flyBodyVel:Destroy() end) end
+        flyBodyVel = Instance.new("BodyVelocity")
+        flyBodyVel.Name = "DarkMoonFlyVel"
+        flyBodyVel.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+        flyBodyVel.P = 1e5
+        flyBodyVel.Velocity = Vector3.zero
+        flyBodyVel.Parent = root
+    end
+    if not flyBodyGyro or not flyBodyGyro.Parent or flyBodyGyro.Parent ~= root then
+        if flyBodyGyro then pcall(function() flyBodyGyro:Destroy() end) end
+        flyBodyGyro = Instance.new("BodyGyro")
+        flyBodyGyro.Name = "DarkMoonFlyGyro"
+        flyBodyGyro.MaxTorque = Vector3.new(1e7, 1e7, 1e7)
+        flyBodyGyro.P = 1e5
+        flyBodyGyro.D = 120
+        flyBodyGyro.CFrame = root.CFrame
+        flyBodyGyro.Parent = root
+    end
+end
+
+local function stepMobileAndPCFly(char, root, hum)
+    if not Config.FlyEnabled or isFlinging then
+        if flyBodyVel or flyBodyGyro then
+            cleanupFlyMovers()
+            if hum and hum.Parent and hum.Health > 0 then
+                pcall(function() hum.PlatformStand = false end)
+            end
+        end
+        return
+    end
+
+    if not root or not hum or hum.Health <= 0 then
+        cleanupFlyMovers()
+        return
+    end
+
+    ensureFlyMovers(root)
+
+    pcall(function()
+        hum.PlatformStand = true
+    end)
+
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
+    end
+
+    local cam = Workspace.CurrentCamera or Camera
+    local moveDir = hum.MoveDirection
+
+    local vert = flyVerticalInput
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+        vert = vert + 1
+    end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.C) then
+        vert = vert - 1
+    end
+    vert = math.clamp(vert, -1, 1)
+
+    local desiredVel = Vector3.zero
+    if moveDir.Magnitude > 0.05 then
+        local forward = cam.CFrame.LookVector
+        local right = cam.CFrame.RightVector
+        local camForwardFlat = Vector3.new(forward.X, 0, forward.Z)
+        local camRightFlat = Vector3.new(right.X, 0, right.Z)
+
+        if camForwardFlat.Magnitude > 0.001 then
+            camForwardFlat = camForwardFlat.Unit
+        end
+        if camRightFlat.Magnitude > 0.001 then
+            camRightFlat = camRightFlat.Unit
+        end
+
+        -- Works with both Mobile thumbstick (MoveDirection) and PC WASD
+        local screenForwardDot = moveDir:Dot(camForwardFlat)
+        local screenRightDot = moveDir:Dot(camRightFlat)
+        local pitchY = forward.Y * screenForwardDot * Config.FlySpeed
+
+        local horizontalDir = moveDir
+        if horizontalDir.Magnitude > 1 then
+            horizontalDir = horizontalDir.Unit
+        end
+
+        desiredVel = (horizontalDir * Config.FlySpeed) + Vector3.new(0, pitchY + (vert * Config.FlySpeed * 0.85), 0)
+    elseif vert ~= 0 then
+        desiredVel = Vector3.new(0, vert * Config.FlySpeed * 0.85, 0)
+    end
+
+    if Config.FlyStyle == "Glide" then
+        flyBodyVel.Velocity = flyBodyVel.Velocity:Lerp(desiredVel, 0.25)
+    else
+        flyBodyVel.Velocity = desiredVel
+    end
+
+    local lookFlat = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
+    if lookFlat.Magnitude > 0.001 then
+        local targetGyroCF = CFrame.lookAt(root.Position, root.Position + lookFlat.Unit)
+        flyBodyGyro.CFrame = flyBodyGyro.CFrame:Lerp(targetGyroCF, 0.35)
+    end
+end
+
 -- Forward UI & Action references
 local isSyncingUI = false
 local SyncUIWithConfig = function() end
 local RefreshFlingPlayerList = function() end
-local updateMobileFlyPadVisibility = function() end
 local ctrls = {}
 
 local SendNotification = function(title, text, duration)
@@ -740,8 +858,7 @@ function Actions.ShootMurderer()
     end
 
     local char = LocalPlayer.Character
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    local gun, gunParent = getGunTool(char)
+    local gun = getGunTool(char)
     if not gun then
         SendNotification("Identical", "You do not have the Gun!", 2)
         return
@@ -752,24 +869,11 @@ function Actions.ShootMurderer()
     end
 
     local hum = getHumanoid(char)
-    if hum and bp and gunParent == bp then
-        hum:EquipTool(gun)
-        task.wait(0.08)
-    end
-
     local root = getRootPart(char)
-    local mRoot = getRootPart(murderer.Character)
-    local mAim = getAimPart(murderer.Character)
-    local shootRemote = getGunShootRemote(gun)
-    if root and mRoot and shootRemote then
-        local rayAtt = root:FindFirstChild("GunRaycastAttachment")
-        local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
-        local aimPos = computePredictedAimPos(mAim or mRoot, mRoot) or mRoot.Position
-        if fireGunRemote(shootRemote, origin, aimPos) then
-            SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")!", 2)
-        end
+    if root and fireGunAtTarget(gun, char, root, hum, murderer) then
+        SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")!", 2)
     else
-        SendNotification("Identical", "Gun shoot remote or target root missing!", 2)
+        SendNotification("Identical", "Could not fire gun at Murderer.", 2)
     end
 end
 
@@ -860,6 +964,9 @@ end
 function Actions.ResetDefaults()
     for k, v in pairs(DefaultConfig) do
         Config[k] = v
+    end
+    if not Config.FlyEnabled then
+        cleanupFlyMovers()
     end
     if SyncUIWithConfig then SyncUIWithConfig() end
     AutoSaveConfig()
@@ -987,6 +1094,7 @@ local function flingCharacter(targetChar)
     local tHum = getHumanoid(targetChar)
     if not hum or hum.Health <= 0 or not tHum or tHum.Health <= 0 then return end
 
+    cleanupFlyMovers()
     isFlinging = true
     local oldCF = root.CFrame
     local hasValidOldCF = (oldCF.Position - Vector3.zero).Magnitude > 1
@@ -1016,6 +1124,7 @@ local function flingCharacter(targetChar)
     end
 
     pcall(function()
+        hum.PlatformStand = false
         hum:ChangeState(Enum.HumanoidStateType.Physics)
     end)
 
@@ -1371,7 +1480,7 @@ if hookmetamethod and getnamecallmethod then
             local remoteName = tostring(self.Name)
             local lremote = string.lower(remoteName)
             local isKnifeThrowRemote = (remoteName == "KnifeThrown") or string.find(lremote, "throw", 1, true)
-            local isGunShootRemote = (remoteName == "Shoot") or string.find(lremote, "shoot", 1, true) or string.find(lremote, "firegun", 1, true)
+            local isGunShootRemote = (remoteName == "Shoot") or string.find(lremote, "shoot", 1, true)
 
             if isKnifeThrowRemote and (Config.KnifeSilentAim or Config.AutoSilentKnife or Config.SilentAim) then
                 local args = {...}
@@ -1396,7 +1505,7 @@ if hookmetamethod and getnamecallmethod then
                         return oldNamecall(self, unpack(args))
                     end
                 end
-            elseif isGunShootRemote and (Config.SilentAim or Config.AutoShoot) then
+            elseif isGunShootRemote and Config.SilentAim then
                 local args = {...}
                 local target = getBestGunTarget()
                 if target and target.Character then
@@ -1491,179 +1600,70 @@ local function Main()
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     }, parent)
 
-    -- MOBILE / TOUCH FLY JOYSTICK & VERTICAL BUTTONS
-    local flyPadGui = make("Frame", {
+    -- Mobile / Touch Fly Up & Down Pad (shown automatically when Fly is enabled)
+    local mobileFlyPad = make("Frame", {
         Name = "MobileFlyPad",
-        Size = UDim2.fromOffset(230, 148),
-        Position = UDim2.new(0, 22, 1, -172),
-        BackgroundTransparency = 1,
+        Size = UDim2.fromOffset(108, 52),
+        Position = UDim2.new(1, -124, 0.72, -26),
+        BackgroundColor3 = C.side,
+        BackgroundTransparency = 0.15,
         Visible = false,
         ZIndex = 20
     }, gui)
-
-    local joyBase = make("Frame", {
-        Name = "JoystickBase",
-        Size = UDim2.fromOffset(116, 116),
-        Position = UDim2.fromOffset(0, 16),
-        BackgroundColor3 = C.side,
-        BackgroundTransparency = 0.18,
-        BorderSizePixel = 0,
-        ZIndex = 21
-    }, flyPadGui)
-    corner(joyBase, 58)
-    make("UIStroke", {Color = C.ACCENT, Thickness = 1.6, Transparency = 0.25}, joyBase)
-
-    local joyKnob = make("Frame", {
-        Name = "JoystickKnob",
-        Size = UDim2.fromOffset(46, 46),
-        Position = UDim2.new(0.5, -23, 0.5, -23),
-        BackgroundColor3 = C.ACCENT,
-        BorderSizePixel = 0,
-        ZIndex = 22
-    }, joyBase)
-    corner(joyKnob, 23)
-
-    local joyHit = make("TextButton", {
-        Name = "JoystickHit",
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1,
-        Text = "",
-        AutoButtonColor = false,
-        ZIndex = 23
-    }, joyBase)
+    corner(mobileFlyPad, 12)
+    outline(mobileFlyPad)
 
     local flyUpBtn = make("TextButton", {
-        Name = "FlyUpButton",
-        Size = UDim2.fromOffset(58, 54),
-        Position = UDim2.fromOffset(136, 16),
+        Name = "FlyUp",
+        Size = UDim2.fromOffset(44, 38),
+        Position = UDim2.fromOffset(7, 7),
         BackgroundColor3 = C.row,
-        BackgroundTransparency = 0.15,
         Text = "UP",
         Font = Enum.Font.GothamBold,
-        TextSize = 13,
-        TextColor3 = C.text,
+        TextSize = 11,
+        TextColor3 = C.good,
         AutoButtonColor = false,
         BorderSizePixel = 0,
-        ZIndex = 22
-    }, flyPadGui)
-    corner(flyUpBtn, 12)
-    make("UIStroke", {Color = C.ACCENT, Thickness = 1.2, Transparency = 0.35}, flyUpBtn)
+        ZIndex = 21
+    }, mobileFlyPad)
+    corner(flyUpBtn, 8)
+    outline(flyUpBtn)
 
     local flyDownBtn = make("TextButton", {
-        Name = "FlyDownButton",
-        Size = UDim2.fromOffset(58, 54),
-        Position = UDim2.fromOffset(136, 78),
+        Name = "FlyDown",
+        Size = UDim2.fromOffset(44, 38),
+        Position = UDim2.fromOffset(57, 7),
         BackgroundColor3 = C.row,
-        BackgroundTransparency = 0.15,
-        Text = "DOWN",
+        Text = "DN",
         Font = Enum.Font.GothamBold,
         TextSize = 11,
-        TextColor3 = C.text,
+        TextColor3 = C.bad,
         AutoButtonColor = false,
         BorderSizePixel = 0,
-        ZIndex = 22
-    }, flyPadGui)
-    corner(flyDownBtn, 12)
-    make("UIStroke", {Color = C.ACCENT, Thickness = 1.2, Transparency = 0.35}, flyDownBtn)
+        ZIndex = 21
+    }, mobileFlyPad)
+    corner(flyDownBtn, 8)
+    outline(flyDownBtn)
 
-    local activeJoyTouch = nil
-    local maxJoyRadius = 35
-
-    local function resetJoystick()
-        activeJoyTouch = nil
-        touchJoystickVector = Vector2.zero
-        joyKnob.Position = UDim2.new(0.5, -23, 0.5, -23)
+    local function bindHoldButton(btn, delta)
+        btn.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                flyVerticalInput = math.clamp(flyVerticalInput + delta, -1, 1)
+                btn.BackgroundColor3 = C.rowHover
+            end
+        end)
+        btn.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                flyVerticalInput = math.clamp(flyVerticalInput - delta, -1, 1)
+                btn.BackgroundColor3 = C.row
+            end
+        end)
     end
+    bindHoldButton(flyUpBtn, 1)
+    bindHoldButton(flyDownBtn, -1)
 
-    local function updateJoystickFromPos(screenPos)
-        local center = joyBase.AbsolutePosition + (joyBase.AbsoluteSize * 0.5)
-        local delta = Vector2.new(screenPos.X - center.X, screenPos.Y - center.Y)
-        local mag = delta.Magnitude
-        if mag > maxJoyRadius then
-            delta = delta.Unit * maxJoyRadius
-            mag = maxJoyRadius
-        end
-        joyKnob.Position = UDim2.new(0.5, delta.X - 23, 0.5, delta.Y - 23)
-        if mag > 4 then
-            touchJoystickVector = Vector2.new(delta.X / maxJoyRadius, -(delta.Y / maxJoyRadius))
-        else
-            touchJoystickVector = Vector2.zero
-        end
-    end
-
-    joyHit.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            activeJoyTouch = input
-            updateJoystickFromPos(input.Position)
-        end
-    end)
-
-    UIS.InputChanged:Connect(function(input)
-        if activeJoyTouch and input == activeJoyTouch and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-            updateJoystickFromPos(input.Position)
-        end
-    end)
-
-    UIS.InputEnded:Connect(function(input)
-        if activeJoyTouch and input == activeJoyTouch then
-            resetJoystick()
-        end
-    end)
-
-    local upHeld, downHeld = false, false
-    local function refreshVerticalTouch()
-        if upHeld and not downHeld then
-            touchVerticalInput = 1
-        elseif downHeld and not upHeld then
-            touchVerticalInput = -1
-        else
-            touchVerticalInput = 0
-        end
-    end
-
-    flyUpBtn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            upHeld = true
-            flyUpBtn.BackgroundColor3 = C.ACCENT
-            flyUpBtn.TextColor3 = C.bg
-            refreshVerticalTouch()
-        end
-    end)
-    flyUpBtn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            upHeld = false
-            flyUpBtn.BackgroundColor3 = C.row
-            flyUpBtn.TextColor3 = C.text
-            refreshVerticalTouch()
-        end
-    end)
-
-    flyDownBtn.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            downHeld = true
-            flyDownBtn.BackgroundColor3 = C.ACCENT
-            flyDownBtn.TextColor3 = C.bg
-            refreshVerticalTouch()
-        end
-    end)
-    flyDownBtn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-            downHeld = false
-            flyDownBtn.BackgroundColor3 = C.row
-            flyDownBtn.TextColor3 = C.text
-            refreshVerticalTouch()
-        end
-    end)
-
-    updateMobileFlyPadVisibility = function()
-        local isTouchDevice = UIS.TouchEnabled
-        flyPadGui.Visible = (Config.FlyEnabled == true) and isTouchDevice
-        if not flyPadGui.Visible then
-            resetJoystick()
-            upHeld = false
-            downHeld = false
-            touchVerticalInput = 0
-        end
+    local function syncFlyPadVisibility()
+        mobileFlyPad.Visible = Config.FlyEnabled == true
     end
 
     local WIN_W, WIN_H = 820, 560
@@ -2806,34 +2806,38 @@ local function Main()
     local miscLeft = column(miscTab, 0, 0.5, "MOVEMENT & ENVIRONMENT")
     local miscRight = column(miscTab, 0.5, 0.5, "PROTECTION & SERVER TOOLS")
 
-    ctrls.FlyEnabled = toggleRow(miscLeft, 1, "Fly (PC & Mobile Joystick)", "WASD + Space/Ctrl or touch joystick", nil, function(v)
+    ctrls.FlyEnabled = toggleRow(miscLeft, 1, "Fly (Mobile + PC)", "Joystick/WASD flight + UP/DN buttons", Enum.KeyCode.F, function(v)
         Config.FlyEnabled = v
-        updateMobileFlyPadVisibility()
-        local r = getRootPart(LocalPlayer.Character)
-        if not v and r then
-            r.AssemblyLinearVelocity = Vector3.zero
-            r.AssemblyAngularVelocity = Vector3.zero
+        syncFlyPadVisibility()
+        if not v then
+            cleanupFlyMovers()
+            local hum = getHumanoid(LocalPlayer.Character)
+            if hum and hum.Health > 0 then
+                pcall(function() hum.PlatformStand = false end)
+            end
         end
     end, Config.FlyEnabled)
-    ctrls.FlySpeed = sliderRow(miscLeft, 2, "Fly Speed", 16, 140, Config.FlySpeed, " studs/s", function(v) Config.FlySpeed = v end)
-    ctrls.SpeedEnabled = toggleRow(miscLeft, 3, "Speed Boost", "Increases movement speed", nil, function(v) Config.SpeedEnabled = v end, Config.SpeedEnabled)
-    ctrls.SpeedValue = sliderRow(miscLeft, 4, "Walk Speed", 16, 60, Config.SpeedValue, "", function(v) Config.SpeedValue = v end)
-    ctrls.JumpEnabled = toggleRow(miscLeft, 5, "Safe Jump Boost", "Increases jump power", nil, function(v) Config.JumpEnabled = v end, Config.JumpEnabled)
-    ctrls.JumpValue = sliderRow(miscLeft, 6, "Jump Power", 50, 100, Config.JumpValue, "", function(v) Config.JumpValue = v end)
-    ctrls.InfiniteJump = toggleRow(miscLeft, 7, "Infinite Jump", "Jump mid-air with Space", nil, function(v) Config.InfiniteJump = v end, Config.InfiniteJump)
-    ctrls.Noclip = toggleRow(miscLeft, 8, "Noclip", "Walk through parts", nil, function(v) Config.Noclip = v end, Config.Noclip)
-    ctrls.Fullbright = toggleRow(miscLeft, 9, "Fullbright", "Eliminates darkness", nil, function(v)
+    ctrls.FlySpeed = sliderRow(miscLeft, 2, "Fly Speed", 16, 120, Config.FlySpeed, " studs/s", function(v) Config.FlySpeed = v end)
+    ctrls.FlyStyle = dropdownRow(miscLeft, 3, "Fly Style", {"Smooth", "Glide"}, Config.FlyStyle, function(v) Config.FlyStyle = v end)
+
+    ctrls.SpeedEnabled = toggleRow(miscLeft, 4, "Speed Boost", "Increases movement speed", nil, function(v) Config.SpeedEnabled = v end, Config.SpeedEnabled)
+    ctrls.SpeedValue = sliderRow(miscLeft, 5, "Walk Speed", 16, 60, Config.SpeedValue, "", function(v) Config.SpeedValue = v end)
+    ctrls.JumpEnabled = toggleRow(miscLeft, 6, "Safe Jump Boost", "Increases jump power", nil, function(v) Config.JumpEnabled = v end, Config.JumpEnabled)
+    ctrls.JumpValue = sliderRow(miscLeft, 7, "Jump Power", 50, 100, Config.JumpValue, "", function(v) Config.JumpValue = v end)
+    ctrls.InfiniteJump = toggleRow(miscLeft, 8, "Infinite Jump", "Jump mid-air with Space", nil, function(v) Config.InfiniteJump = v end, Config.InfiniteJump)
+    ctrls.Noclip = toggleRow(miscLeft, 9, "Noclip", "Walk through parts", nil, function(v) Config.Noclip = v end, Config.Noclip)
+    ctrls.Fullbright = toggleRow(miscLeft, 10, "Fullbright", "Eliminates darkness", nil, function(v)
         Config.Fullbright = v
         if not v then
             Lighting.Ambient = Color3.fromRGB(128, 128, 128)
             Lighting.Brightness = 1
         end
     end, Config.Fullbright)
-    ctrls.NoFog = toggleRow(miscLeft, 10, "Remove Fog", "Clears distance fog", nil, function(v)
+    ctrls.NoFog = toggleRow(miscLeft, 11, "Remove Fog", "Clears distance fog", nil, function(v)
         Config.NoFog = v
         if not v then Lighting.FogEnd = 1000 end
     end, Config.NoFog)
-    ctrls.DisableParticles = toggleRow(miscLeft, 11, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
+    ctrls.DisableParticles = toggleRow(miscLeft, 12, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
 
     ctrls.AntiFling = toggleRow(miscRight, 1, "Anti-Fling", "Blocks player collisions & flings", nil, function(v) Config.AntiFling = v end, Config.AntiFling)
     ctrls.AntiVoid = toggleRow(miscRight, 2, "Anti-Void", "Recovers when falling into void", nil, function(v) Config.AntiVoid = v end, Config.AntiVoid)
@@ -3024,7 +3028,7 @@ local function Main()
                 end
             end
         end
-        updateMobileFlyPadVisibility()
+        syncFlyPadVisibility()
         isSyncingUI = false
     end
 
@@ -3094,7 +3098,7 @@ local function Main()
             Config.AutoKill = false
             Config.AutoSilentKnife = false
             Config.FlyEnabled = false
-            updateMobileFlyPadVisibility()
+            cleanupFlyMovers()
             SyncUIWithConfig()
             SendNotification("Identical", "EMERGENCY STOP: Features halted.", 2)
             return
@@ -3415,13 +3419,6 @@ local function Main()
     end
 
     table.insert(activeConnections, RunService.Stepped:Connect(function()
-        if Config.FlyEnabled and LocalPlayer.Character then
-            for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
-            end
-        end
         if Config.AntiFling and not isFlinging then
             for _, p in ipairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer and p.Character then
@@ -3435,7 +3432,7 @@ local function Main()
         end
     end))
 
-    table.insert(activeConnections, RunService.Heartbeat:Connect(function(dt)
+    table.insert(activeConnections, RunService.Heartbeat:Connect(function()
         local char = LocalPlayer.Character
         local root = getRootPart(char)
         local hum = getHumanoid(char)
@@ -3443,73 +3440,15 @@ local function Main()
 
         updateAuraRing(root)
         updateFOVCircle()
+        stepMobileAndPCFly(char, root, hum)
 
-        if Config.FlyEnabled and root and hum and not isFlinging then
-            local cam = Workspace.CurrentCamera
-            local forward = Vector3.new(cam.CFrame.LookVector.X, 0, cam.CFrame.LookVector.Z)
-            if forward.Magnitude > 1e-4 then
-                forward = forward.Unit
-            else
-                forward = Vector3.new(0, 0, -1)
-            end
-            local right = Vector3.new(cam.CFrame.RightVector.X, 0, cam.CFrame.RightVector.Z)
-            if right.Magnitude > 1e-4 then
-                right = right.Unit
-            else
-                right = Vector3.new(1, 0, 0)
-            end
-
-            local moveDir = Vector3.zero
-            if not UIS:GetFocusedTextBox() then
-                if UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.Up) then
-                    moveDir = moveDir + forward
-                end
-                if UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.Down) then
-                    moveDir = moveDir - forward
-                end
-                if UIS:IsKeyDown(Enum.KeyCode.D) or UIS:IsKeyDown(Enum.KeyCode.Right) then
-                    moveDir = moveDir + right
-                end
-                if UIS:IsKeyDown(Enum.KeyCode.A) or UIS:IsKeyDown(Enum.KeyCode.Left) then
-                    moveDir = moveDir - right
-                end
-            end
-
-            if touchJoystickVector.Magnitude > 0.02 then
-                moveDir = moveDir + (right * touchJoystickVector.X) + (forward * touchJoystickVector.Y)
-            end
-
-            if moveDir.Magnitude > 1 then
-                moveDir = moveDir.Unit
-            end
-
-            local vert = touchVerticalInput
-            if not UIS:GetFocusedTextBox() then
-                if UIS:IsKeyDown(Enum.KeyCode.Space) then
-                    vert = vert + 1
-                end
-                if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then
-                    vert = vert - 1
-                end
-            end
-            vert = math.clamp(vert, -1, 1)
-
-            local flyVel = (moveDir * Config.FlySpeed) + Vector3.new(0, vert * Config.FlySpeed, 0)
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-            root.CFrame = CFrame.new(root.Position + (flyVel * math.min(dt, 0.05)), root.Position + (flyVel * math.min(dt, 0.05)) + forward)
-            hum.PlatformStand = true
-        elseif hum and hum.PlatformStand and not isFlinging then
-            hum.PlatformStand = false
-        end
-
-        if root and hum and not Config.FlyEnabled then
+        if root and hum then
             local vel = root.AssemblyLinearVelocity
             local angVel = root.AssemblyAngularVelocity
             local velMag = vel.Magnitude
             local angMag = angVel.Magnitude
 
-            if not isFlinging and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
+            if not isFlinging and not Config.FlyEnabled and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
                 lastSafePosition = root.CFrame
             end
 
@@ -3520,7 +3459,7 @@ local function Main()
                     root.CFrame = lastSafePosition
                 end
 
-                if Config.AntiVoid and (lastSafePosition.Y - root.Position.Y > 30) then
+                if Config.AntiVoid and not Config.FlyEnabled and (lastSafePosition.Y - root.Position.Y > 30) then
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
                     root.CFrame = lastSafePosition
@@ -3528,7 +3467,7 @@ local function Main()
             end
         end
 
-        if hum and not isFlinging and not Config.FlyEnabled then
+        if hum and not isFlinging then
             if Config.SpeedEnabled then
                 if hum.WalkSpeed ~= Config.SpeedValue then hum.WalkSpeed = Config.SpeedValue end
             else
@@ -3683,26 +3622,14 @@ local function Main()
         end
 
         if Config.AutoShoot and root and (now - lastShootTick >= 0.35) then
-            local bp = LocalPlayer:FindFirstChild("Backpack")
-            local gun, gunParent = getGunTool(char)
-            local target = getBestGunTarget()
+            local gun = getGunTool(char)
+            local target = murderer or getBestGunTarget()
             if gun and target and target.Character and isPlayerAlive(target) then
-                local tRoot = getRootPart(target.Character)
-                local tAim = getAimPart(target.Character)
-                if tRoot then
-                    if hum and bp and gunParent == bp and Config.AutoEquipGun then
-                        hum:EquipTool(gun)
-                    end
-                    local shootRemote = getGunShootRemote(gun)
-                    local rayAtt = root:FindFirstChild("GunRaycastAttachment")
-                    local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
-                    local aimPos = computePredictedAimPos(tAim or tRoot, tRoot) or tRoot.Position
-                    if shootRemote and fireGunRemote(shootRemote, origin, aimPos) then
-                        lastShootTick = now
-                        if Config.SingleShot then
-                            Config.AutoShoot = false
-                            if ctrls.AutoShoot then ctrls.AutoShoot.Set(false, true) end
-                        end
+                if fireGunAtTarget(gun, char, root, hum, target) then
+                    lastShootTick = now
+                    if Config.SingleShot then
+                        Config.AutoShoot = false
+                        if ctrls.AutoShoot then ctrls.AutoShoot.Set(false, true) end
                     end
                 end
             end
@@ -3959,6 +3886,7 @@ local function Main()
     end))
 
     getgenv().IdenticalMM2Unload = function()
+        cleanupFlyMovers()
         for _, conn in ipairs(activeConnections) do
             pcall(function() conn:Disconnect() end)
         end
