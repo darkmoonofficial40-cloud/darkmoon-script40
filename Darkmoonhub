@@ -328,66 +328,6 @@ local function hasRoleTool(container, roleKind)
     return false
 end
 
-local function getGunTool(char)
-    local bp = LocalPlayer and LocalPlayer:FindFirstChild("Backpack")
-    local containers = {}
-    if char then table.insert(containers, char) end
-    if bp then table.insert(containers, bp) end
-
-    for _, container in ipairs(containers) do
-        for _, item in ipairs(container:GetChildren()) do
-            if item:IsA("Tool") then
-                local lname = string.lower(item.Name)
-                if item.Name == "Gun"
-                    or string.find(lname, "gun", 1, true)
-                    or string.find(lname, "revolver", 1, true)
-                    or string.find(lname, "pistol", 1, true)
-                    or item:FindFirstChild("GunScript")
-                    or item:FindFirstChild("GunLocal")
-                    or item:FindFirstChild("Shoot") then
-                    return item, container
-                end
-            end
-        end
-    end
-    return nil, nil
-end
-
-local function getGunShootRemote(gun)
-    if not gun then return nil end
-    local direct = gun:FindFirstChild("Shoot")
-    if direct and (direct:IsA("RemoteEvent") or direct:IsA("RemoteFunction")) then
-        return direct
-    end
-
-    local events = gun:FindFirstChild("Events")
-    if events then
-        local evShoot = events:FindFirstChild("Shoot")
-        if evShoot and (evShoot:IsA("RemoteEvent") or evShoot:IsA("RemoteFunction")) then
-            return evShoot
-        end
-        for _, child in ipairs(events:GetDescendants()) do
-            if (child:IsA("RemoteEvent") or child:IsA("RemoteFunction")) then
-                local lname = string.lower(child.Name)
-                if string.find(lname, "shoot", 1, true) or string.find(lname, "fire", 1, true) or string.find(lname, "gun", 1, true) then
-                    return child
-                end
-            end
-        end
-    end
-
-    for _, desc in ipairs(gun:GetDescendants()) do
-        if (desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction")) then
-            local lname = string.lower(desc.Name)
-            if string.find(lname, "shoot", 1, true) or string.find(lname, "fire", 1, true) then
-                return desc
-            end
-        end
-    end
-
-    return nil
-end
-
 local function getKnifeTool(char)
     local bp = LocalPlayer and LocalPlayer:FindFirstChild("Backpack")
     local containers = {}
@@ -470,45 +410,6 @@ local function computePredictedAimPos(targetPart, fallbackRoot)
         pos = pos + (vel * lead)
     end
     return pos
-end
-
-local function fireGunAtTarget(gun, root, targetChar)
-    if not gun or not root or not targetChar then return false end
-    local shootRemote = getGunShootRemote(gun)
-    if not shootRemote then return false end
-
-    local tRoot = getRootPart(targetChar)
-    local tAim = getAimPart(targetChar)
-    local targetAnchor = tAim or tRoot
-    if not targetAnchor then return false end
-
-    local aimPos = computePredictedAimPos(targetAnchor, tRoot) or targetAnchor.Position
-    local rayAtt = root:FindFirstChild("GunRaycastAttachment")
-    local handle = gun:FindFirstChild("Handle")
-    local originCF = (rayAtt and rayAtt.WorldCFrame)
-        or (handle and handle:IsA("BasePart") and handle.CFrame)
-        or root.CFrame
-
-    local ok = false
-    if shootRemote:IsA("RemoteEvent") then
-        ok = pcall(function() shootRemote:FireServer(originCF, CFrame.new(aimPos)) end)
-        if not ok then
-            ok = pcall(function() shootRemote:FireServer(originCF, aimPos) end)
-        end
-        if not ok then
-            ok = pcall(function() shootRemote:FireServer(CFrame.new(aimPos)) end)
-        end
-        if not ok then
-            ok = pcall(function() shootRemote:FireServer(aimPos) end)
-        end
-    elseif shootRemote:IsA("RemoteFunction") then
-        ok = pcall(function() shootRemote:InvokeServer(originCF, CFrame.new(aimPos)) end)
-        if not ok then
-            ok = pcall(function() shootRemote:InvokeServer(originCF, aimPos) end)
-        end
-    end
-
-    return ok
 end
 
 local function fireKnifeThrowRemote(remote, originCF, targetPos)
@@ -750,7 +651,7 @@ function Actions.ShootMurderer()
 
     local char = LocalPlayer.Character
     local bp = LocalPlayer:FindFirstChild("Backpack")
-    local gun, gunParent = getGunTool(char)
+    local gun = (bp and bp:FindFirstChild("Gun")) or (char and char:FindFirstChild("Gun"))
     if not gun then
         SendNotification("Identical", "You do not have the Gun!", 2)
         return
@@ -761,16 +662,20 @@ function Actions.ShootMurderer()
     end
 
     local hum = getHumanoid(char)
-    if hum and bp and gunParent == bp then
-        pcall(function() hum:EquipTool(gun) end)
-        task.wait(0.12)
+    if hum and bp and gun.Parent == bp then
+        hum:EquipTool(gun)
+        task.wait(0.1)
     end
 
     local root = getRootPart(char)
-    if root and fireGunAtTarget(gun, root, murderer.Character) then
+    local mRoot = getRootPart(murderer.Character)
+    local mAim = getAimPart(murderer.Character)
+    if root and mRoot and gun:FindFirstChild("Shoot") then
+        local rayAtt = root:FindFirstChild("GunRaycastAttachment")
+        local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
+        local aimPos = computePredictedAimPos(mAim or mRoot, mRoot) or mRoot.Position
+        gun.Shoot:FireServer(origin, CFrame.new(aimPos))
         SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")!", 2)
-    else
-        SendNotification("Identical", "Could not fire gun at Murderer.", 2)
     end
 end
 
@@ -1372,7 +1277,6 @@ if hookmetamethod and getnamecallmethod then
             local remoteName = tostring(self.Name)
             local lremote = string.lower(remoteName)
             local isKnifeThrowRemote = (remoteName == "KnifeThrown") or string.find(lremote, "throw", 1, true)
-            local isGunShootRemote = (remoteName == "Shoot") or string.find(lremote, "shoot", 1, true)
 
             if isKnifeThrowRemote and (Config.KnifeSilentAim or Config.AutoSilentKnife or Config.SilentAim) then
                 local args = {...}
@@ -1397,7 +1301,7 @@ if hookmetamethod and getnamecallmethod then
                         return oldNamecall(self, unpack(args))
                     end
                 end
-            elseif isGunShootRemote and Config.SilentAim then
+            elseif remoteName == "Shoot" and Config.SilentAim then
                 local args = {...}
                 local target = getBestGunTarget()
                 if target and target.Character then
@@ -1405,17 +1309,7 @@ if hookmetamethod and getnamecallmethod then
                     local tAim = getAimPart(target.Character)
                     local targetPos = computePredictedAimPos(tAim or tRoot, tRoot)
                     if targetPos then
-                        if typeof(args[2]) == "CFrame" then
-                            args[2] = CFrame.new(targetPos)
-                        elseif typeof(args[2]) == "Vector3" then
-                            args[2] = targetPos
-                        elseif typeof(args[1]) == "CFrame" then
-                            args[1] = CFrame.new(targetPos)
-                        elseif typeof(args[1]) == "Vector3" then
-                            args[1] = targetPos
-                        else
-                            args[2] = CFrame.new(targetPos)
-                        end
+                        args[2] = CFrame.new(targetPos)
                         if setnamecallmethod then setnamecallmethod(method) end
                         return oldNamecall(self, unpack(args))
                     end
@@ -3144,7 +3038,6 @@ local function Main()
 
     local lastFarmTick = 0
     local lastShootTick = 0
-    local lastEquipGunTick = 0
     local lastKnifeTick = 0
     local lastSafePosition = nil
     local roundStartedFlag = false
@@ -3430,18 +3323,22 @@ local function Main()
             end
         end
 
-        if Config.AutoShoot and root and (now - lastShootTick >= 0.35) then
-            local gun, gunParent = getGunTool(char)
+        if Config.AutoShoot and root and (now - lastShootTick >= 0.45) then
+            local bp = LocalPlayer:FindFirstChild("Backpack")
+            local gun = (bp and bp:FindFirstChild("Gun")) or (char and char:FindFirstChild("Gun"))
             local target = getBestGunTarget()
             if gun and target and target.Character and isPlayerAlive(target) then
-                local bp = LocalPlayer:FindFirstChild("Backpack")
-                if gunParent == bp then
-                    if Config.AutoEquipGun and hum and (now - lastEquipGunTick >= 0.2) then
-                        pcall(function() hum:EquipTool(gun) end)
-                        lastEquipGunTick = now
+                local tRoot = getRootPart(target.Character)
+                local tAim = getAimPart(target.Character)
+                if tRoot then
+                    if hum and bp and gun.Parent == bp then
+                        hum:EquipTool(gun)
                     end
-                elseif gunParent == char then
-                    if fireGunAtTarget(gun, root, target.Character) then
+                    local rayAtt = root:FindFirstChild("GunRaycastAttachment")
+                    local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
+                    local aimPos = computePredictedAimPos(tAim or tRoot, tRoot) or tRoot.Position
+                    if gun:FindFirstChild("Shoot") then
+                        gun.Shoot:FireServer(origin, CFrame.new(aimPos))
                         lastShootTick = now
                         if Config.SingleShot then
                             Config.AutoShoot = false
