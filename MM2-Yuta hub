@@ -99,6 +99,8 @@ local Config = {
     JumpValue = 50,
     InfiniteJump = false,
     Noclip = false,
+    Fly = false,
+    FlySpeed = 35,
 
     AntiVoid = true,
     AntiFling = true,
@@ -215,8 +217,6 @@ end
 
 local activeConnections = {}
 local trackedESPElements = {}
-local trackedTracers = {}
-local trackedBoxes = {}
 local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
@@ -232,27 +232,12 @@ local function fireTouch(part1, part2)
     end
 end
 
-local function clearBoxesCategory(prefix)
-    local toRemove = {}
-    for id in pairs(trackedBoxes) do
-        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
-            table.insert(toRemove, id)
-        end
-    end
-    for _, id in ipairs(toRemove) do
-        local boxData = trackedBoxes[id]
-        if boxData then
-            if boxData.outline then pcall(function() boxData.outline:Remove() end) end
-            if boxData.box then pcall(function() boxData.box:Remove() end) end
-            trackedBoxes[id] = nil
-        end
-    end
-end
+local trackedTracers = {}
 
 local function clearESPCategory(prefix)
     local toRemove = {}
     for id in pairs(trackedESPElements) do
-        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
+        if string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(toRemove, id)
         end
     end
@@ -264,7 +249,7 @@ local function clearESPCategory(prefix)
     end
     local tracersToRemove = {}
     for id in pairs(trackedTracers) do
-        if prefix == "" or string.sub(id, 1, string.len(prefix)) == prefix then
+        if string.sub(id, 1, string.len(prefix)) == prefix then
             table.insert(tracersToRemove, id)
         end
     end
@@ -274,9 +259,8 @@ local function clearESPCategory(prefix)
             trackedTracers[id] = nil
         end
     end
-    clearBoxesCategory(prefix)
     for _, c in ipairs(espFolder:GetChildren()) do
-        if prefix == "" or string.sub(c.Name, 1, string.len(prefix)) == prefix then
+        if string.sub(c.Name, 1, string.len(prefix)) == prefix then
             pcall(function() c:Destroy() end)
         end
     end
@@ -488,15 +472,6 @@ local murdererRow = { SetValue = function(_) end, SetColor = function(_) end }
 local sheriffRow = { SetValue = function(_) end, SetColor = function(_) end }
 
 local Actions = {}
-
-function Actions.CopyDiscord()
-    if setclipboard then
-        pcall(setclipboard, DISCORD_INVITE)
-        SendNotification("Discord", "Copied invite: " .. DISCORD_INVITE, 3)
-    else
-        SendNotification("Discord", DISCORD_INVITE, 4)
-    end
-end
 
 function Actions.ShootMurderer()
     local murderer = nil
@@ -1903,7 +1878,7 @@ local function Main()
         corner(row, 9)
 
         make("TextLabel", {
-            Size = UDim2.new(0.42, -14, 1, 0),
+            Size = UDim2.new(0.45, -14, 1, 0),
             Position = UDim2.fromOffset(14, 0),
             BackgroundTransparency = 1,
             Text = title,
@@ -1914,8 +1889,8 @@ local function Main()
         }, row)
 
         local valLbl = make("TextLabel", {
-            Size = UDim2.new(0.56, -14, 1, 0),
-            Position = UDim2.new(0.42, 0, 0, 0),
+            Size = UDim2.new(0.53, -14, 1, 0),
+            Position = UDim2.new(0.45, 0, 0, 0),
             BackgroundTransparency = 1,
             Text = tostring(initialValue or ""),
             Font = Enum.Font.GothamBold,
@@ -1954,20 +1929,18 @@ local function Main()
 
     -- 1. HOME TAB
     local homeTab = newTab("Home", 1)
-    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS & DISCORD")
+    local homeLeft = column(homeTab, 0, 0.5, "ROUND STATUS & ROLES")
     local homeRight = column(homeTab, 0.5, 0.5, "QUICK ACTIONS & CONFIG")
 
-    infoRow(homeLeft, 1, "Discord", DISCORD_INVITE, C.ACCENT)
-    buttonRow(homeLeft, 2, "COPY DISCORD INVITE", C.row, Actions.CopyDiscord)
-    statusRoundRow = infoRow(homeLeft, 3, "Round State", "Waiting...", C.ACCENT)
-    timerRoundRow = infoRow(homeLeft, 4, "Time Remaining", "0:00", C.text)
-    murdererRow = infoRow(homeLeft, 5, "Murderer", "Undetected", C.bad)
-    sheriffRow = infoRow(homeLeft, 6, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
+    statusRoundRow = infoRow(homeLeft, 1, "Round State", "Waiting...", C.ACCENT)
+    timerRoundRow = infoRow(homeLeft, 2, "Time Remaining", "0:00", C.text)
+    murdererRow = infoRow(homeLeft, 3, "Murderer", "Undetected", C.bad)
+    sheriffRow = infoRow(homeLeft, 4, "Sheriff", "Undetected", Color3.fromRGB(96, 165, 250))
 
-    ctrls.RoundTimer = toggleRow(homeLeft, 7, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
-    ctrls.DeathNotifs = toggleRow(homeLeft, 8, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
-    ctrls.RoleReveals = toggleRow(homeLeft, 9, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
-    ctrls.AnnounceRoles = toggleRow(homeLeft, 10, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
+    ctrls.RoundTimer = toggleRow(homeLeft, 5, "Round Timer", "Tracks active match timer", nil, function(v) Config.RoundTimer = v end, Config.RoundTimer)
+    ctrls.DeathNotifs = toggleRow(homeLeft, 6, "Death Notifications", "Alerts when players die", nil, function(v) Config.DeathNotifs = v end, Config.DeathNotifs)
+    ctrls.RoleReveals = toggleRow(homeLeft, 7, "Role Reveals", "Detects Murderer and Sheriff", nil, function(v) Config.RoleReveals = v end, Config.RoleReveals)
+    ctrls.AnnounceRoles = toggleRow(homeLeft, 8, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
 
     buttonRow(homeRight, 1, "SHOOT MURDERER", C.row, Actions.ShootMurderer)
     buttonRow(homeRight, 2, "GRAB GUN", C.row, Actions.GrabGun)
@@ -2034,10 +2007,7 @@ local function Main()
         Config.ESPChams = v
         if not v then clearESPCategory("cham_") end
     end, Config.ESPChams)
-    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "2D ESP Box", "Draws 2D bounding boxes around players", nil, function(v)
-        Config.ESPBoxes = v
-        if not v then clearBoxesCategory("mm2_") end
-    end, Config.ESPBoxes)
+    ctrls.ESPBoxes = toggleRow(visualsLeft, 3, "Player Boxes", "Toggles player box ESP option", nil, function(v) Config.ESPBoxes = v end, Config.ESPBoxes)
     ctrls.ESPNames = toggleRow(visualsLeft, 4, "Role Tags & Names", "Shows role and player name", nil, function(v) Config.ESPNames = v end, Config.ESPNames)
     ctrls.ESPDistance = toggleRow(visualsLeft, 5, "Distance Labels", "Shows distance in studs", nil, function(v) Config.ESPDistance = v end, Config.ESPDistance)
     ctrls.ESPTracers = toggleRow(visualsLeft, 6, "Snapline Tracers", "Draws tracer lines to targets", nil, function(v)
@@ -2124,18 +2094,20 @@ local function Main()
     ctrls.JumpValue = sliderRow(miscLeft, 4, "Jump Power", 50, 100, Config.JumpValue, "", function(v) Config.JumpValue = v end)
     ctrls.InfiniteJump = toggleRow(miscLeft, 5, "Infinite Jump", "Jump mid-air with Space", nil, function(v) Config.InfiniteJump = v end, Config.InfiniteJump)
     ctrls.Noclip = toggleRow(miscLeft, 6, "Noclip", "Walk through parts", nil, function(v) Config.Noclip = v end, Config.Noclip)
-    ctrls.Fullbright = toggleRow(miscLeft, 7, "Fullbright", "Eliminates darkness", nil, function(v)
+    ctrls.Fly = toggleRow(miscLeft, 7, "Fly Toggle", "Stores Fly state in Config", nil, function(v) Config.Fly = v end, Config.Fly)
+    ctrls.FlySpeed = sliderRow(miscLeft, 8, "Fly Speed", 10, 100, Config.FlySpeed, "", function(v) Config.FlySpeed = v end)
+    ctrls.Fullbright = toggleRow(miscLeft, 9, "Fullbright", "Eliminates darkness", nil, function(v)
         Config.Fullbright = v
         if not v then
             Lighting.Ambient = Color3.fromRGB(128, 128, 128)
             Lighting.Brightness = 1
         end
     end, Config.Fullbright)
-    ctrls.NoFog = toggleRow(miscLeft, 8, "Remove Fog", "Clears distance fog", nil, function(v)
+    ctrls.NoFog = toggleRow(miscLeft, 10, "Remove Fog", "Clears distance fog", nil, function(v)
         Config.NoFog = v
         if not v then Lighting.FogEnd = 1000 end
     end, Config.NoFog)
-    ctrls.DisableParticles = toggleRow(miscLeft, 9, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
+    ctrls.DisableParticles = toggleRow(miscLeft, 11, "Disable Particles", "Tracks anti-lag particle toggle", nil, function(v) Config.DisableParticles = v end, Config.DisableParticles)
 
     ctrls.AntiFling = toggleRow(miscRight, 1, "Anti-Fling", "Blocks player collisions & flings", nil, function(v) Config.AntiFling = v end, Config.AntiFling)
     ctrls.AntiVoid = toggleRow(miscRight, 2, "Anti-Void", "Recovers when falling into void", nil, function(v) Config.AntiVoid = v end, Config.AntiVoid)
@@ -2458,118 +2430,6 @@ local function Main()
         return hl
     end
 
-    local function hideBox(id)
-        local boxData = trackedBoxes[id]
-        if boxData then
-            if boxData.box then boxData.box.Visible = false end
-            if boxData.outline then boxData.outline.Visible = false end
-        end
-    end
-
-    local function removeBox(id)
-        local boxData = trackedBoxes[id]
-        if boxData then
-            if boxData.outline then pcall(function() boxData.outline:Remove() end) end
-            if boxData.box then pcall(function() boxData.box:Remove() end) end
-            trackedBoxes[id] = nil
-        end
-    end
-
-    local function update2DBox(id, targetChar, rootPart, color)
-        if not Drawing or not Drawing.new then return end
-        if not Config.ESPBoxes or not targetChar or not rootPart or not Camera then
-            hideBox(id)
-            return
-        end
-
-        local cf, size = targetChar:GetBoundingBox()
-        if not cf or not size then
-            hideBox(id)
-            return
-        end
-
-        local halfX = size.X * 0.5
-        local halfY = size.Y * 0.5
-        local halfZ = size.Z * 0.5
-
-        local corners = {
-            cf * Vector3.new(-halfX, -halfY, -halfZ),
-            cf * Vector3.new(-halfX, -halfY, halfZ),
-            cf * Vector3.new(-halfX, halfY, -halfZ),
-            cf * Vector3.new(-halfX, halfY, halfZ),
-            cf * Vector3.new(halfX, -halfY, -halfZ),
-            cf * Vector3.new(halfX, -halfY, halfZ),
-            cf * Vector3.new(halfX, halfY, -halfZ),
-            cf * Vector3.new(halfX, halfY, halfZ)
-        }
-
-        local minX, minY = math.huge, math.huge
-        local maxX, maxY = -math.huge, -math.huge
-        local anyOnScreen = false
-
-        for _, cornerPos in ipairs(corners) do
-            local screenPos, onScreen = Camera:WorldToViewportPoint(cornerPos)
-            if screenPos.Z > 0 then
-                if onScreen then
-                    anyOnScreen = true
-                end
-                if screenPos.X < minX then minX = screenPos.X end
-                if screenPos.Y < minY then minY = screenPos.Y end
-                if screenPos.X > maxX then maxX = screenPos.X end
-                if screenPos.Y > maxY then maxY = screenPos.Y end
-            end
-        end
-
-        if not anyOnScreen or maxX <= minX or maxY <= minY then
-            hideBox(id)
-            return
-        end
-
-        local width = math.clamp(maxX - minX, 6, Camera.ViewportSize.X)
-        local height = math.clamp(maxY - minY, 10, Camera.ViewportSize.Y)
-        local pos = Vector2.new(minX, minY)
-        local boxSize = Vector2.new(width, height)
-
-        local boxData = trackedBoxes[id]
-        if not boxData then
-            local ok, created = pcall(function()
-                local outSq = Drawing.new("Square")
-                outSq.Thickness = 3
-                outSq.Filled = false
-                outSq.Color = Color3.new(0, 0, 0)
-                outSq.Transparency = 0.75
-                outSq.Visible = false
-
-                local sq = Drawing.new("Square")
-                sq.Thickness = 1.5
-                sq.Filled = false
-                sq.Color = color
-                sq.Transparency = 0.95
-                sq.Visible = false
-
-                return {outline = outSq, box = sq}
-            end)
-            if ok and created then
-                boxData = created
-                trackedBoxes[id] = boxData
-            else
-                return
-            end
-        end
-
-        if boxData.outline then
-            boxData.outline.Position = pos
-            boxData.outline.Size = boxSize
-            boxData.outline.Visible = true
-        end
-        if boxData.box then
-            boxData.box.Position = pos
-            boxData.box.Size = boxSize
-            boxData.box.Color = color
-            boxData.box.Visible = true
-        end
-    end
-
     local function updateTracer(id, targetPos, color)
         if not Drawing or not Drawing.new then return end
         local line = trackedTracers[id]
@@ -2818,7 +2678,6 @@ local function Main()
 
         if Config.RoleESP and root then
             for _, p in ipairs(Players:GetPlayers()) do
-                local id = "mm2_" .. p.UserId
                 if p ~= LocalPlayer and p.Character and isPlayerAlive(p) then
                     local pRoot = getRootPart(p.Character)
                     if pRoot then
@@ -2840,37 +2699,25 @@ local function Main()
                                 text = text .. " (" .. dist .. "s)"
                             end
 
-                            getOrCreateESP(id, pRoot, text, col)
+                            getOrCreateESP("mm2_" .. p.UserId, pRoot, text, col)
                             if Config.ESPChams then
                                 getOrCreateCham(p.UserId, p.Character, col)
                             end
-                            if Config.ESPBoxes then
-                                update2DBox(id, p.Character, pRoot, col)
-                            else
-                                hideBox(id)
-                            end
-                            updateTracer(id, pRoot.Position, col)
-                        else
-                            hideBox(id)
+                            updateTracer("mm2_" .. p.UserId, pRoot.Position, col)
                         end
-                    else
-                        hideBox(id)
                     end
                 else
-                    if trackedESPElements[id] then
-                        trackedESPElements[id]:Destroy()
-                        trackedESPElements[id] = nil
+                    if trackedESPElements["mm2_" .. p.UserId] then
+                        trackedESPElements["mm2_" .. p.UserId]:Destroy()
+                        trackedESPElements["mm2_" .. p.UserId] = nil
                     end
                     if trackedESPElements["cham_" .. p.UserId] then
                         trackedESPElements["cham_" .. p.UserId]:Destroy()
                         trackedESPElements["cham_" .. p.UserId] = nil
                     end
-                    removeBox(id)
-                    removeTracer(id)
+                    removeTracer("mm2_" .. p.UserId)
                 end
             end
-        else
-            clearBoxesCategory("mm2_")
         end
 
         if Config.GunESP and root then
