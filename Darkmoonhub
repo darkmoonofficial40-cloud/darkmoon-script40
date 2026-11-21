@@ -34,6 +34,7 @@ local Config = {
     RoleReveals = true,
     AnnounceRoles = false,
 
+    MobileButtons = true,
     AutoShoot = false,
     SilentAim = false,
     AimPrediction = true,
@@ -221,14 +222,6 @@ local deadPlayersList = {}
 local originalHitboxSizes = {}
 local isFlinging = false
 local selectedFlingPlayerName = nil
-local activeFarmTween = nil
-
-local function stopActiveFarmTween()
-    if activeFarmTween then
-        pcall(function() activeFarmTween:Cancel() end)
-        activeFarmTween = nil
-    end
-end
 
 local function fireTouch(part1, part2)
     if firetouchinterest and part1 and part2 then
@@ -330,6 +323,57 @@ local function hasRoleTool(container, roleKind)
     return false
 end
 
+local function findRoleTool(char, bp, roleKind)
+    local exactName = (roleKind == "Murderer") and "Knife" or "Gun"
+    if char and char:FindFirstChild(exactName) then
+        return char:FindFirstChild(exactName)
+    end
+    if bp and bp:FindFirstChild(exactName) then
+        return bp:FindFirstChild(exactName)
+    end
+    for _, container in ipairs({char, bp}) do
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") then
+                    local lname = string.lower(item.Name)
+                    if roleKind == "Murderer" then
+                        if string.find(lname, "knife", 1, true) or string.find(lname, "blade", 1, true) or item:FindFirstChild("KnifeScript") or item:FindFirstChild("KnifeLocal") then
+                            return item
+                        end
+                    elseif roleKind == "Sheriff" then
+                        if string.find(lname, "gun", 1, true) or string.find(lname, "revolver", 1, true) or string.find(lname, "pistol", 1, true) or item:FindFirstChild("GunScript") or item:FindFirstChild("GunLocal") then
+                            return item
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function findKnifeThrowRemote(knife)
+    if not knife then return nil end
+    local events = knife:FindFirstChild("Events")
+    if events then
+        local kt = events:FindFirstChild("KnifeThrown")
+        if kt and kt:IsA("RemoteEvent") then
+            return kt
+        end
+        for _, child in ipairs(events:GetChildren()) do
+            if child:IsA("RemoteEvent") and string.find(string.lower(child.Name), "throw", 1, true) then
+                return child
+            end
+        end
+    end
+    for _, desc in ipairs(knife:GetDescendants()) do
+        if desc:IsA("RemoteEvent") and string.find(string.lower(desc.Name), "throw", 1, true) then
+            return desc
+        end
+    end
+    return nil
+end
+
 local function getPlayerRole(p)
     if not p then return "Innocent" end
 
@@ -397,23 +441,6 @@ local function getLobbyModel()
     return Workspace:FindFirstChild("SummerLobby") or Workspace:FindFirstChild("Lobby")
 end
 
-local function isCoinPartValid(part)
-    if not part or not part:IsA("BasePart") or not part.Parent then
-        return false
-    end
-    if part.Transparency >= 0.95 then
-        return false
-    end
-    if part:GetAttribute("Collected") or part:GetAttribute("Delete") then
-        return false
-    end
-    local parentModel = part:FindFirstAncestorOfClass("Model")
-    if parentModel and (parentModel:GetAttribute("Collected") or parentModel:GetAttribute("Delete")) then
-        return false
-    end
-    return true
-end
-
 local function getAllActiveCoins()
     local coins = {}
     local seen = {}
@@ -423,7 +450,7 @@ local function getAllActiveCoins()
         for _, v in ipairs(CollectionService:GetTagged(tag)) do
             if v and v.Parent and not v:GetAttribute("Collected") and not v:GetAttribute("Delete") then
                 local part = v:IsA("BasePart") and v or v:FindFirstChildWhichIsA("BasePart")
-                if isCoinPartValid(part) and not seen[part] then
+                if part and not seen[part] and part.Transparency < 0.95 then
                     seen[part] = true
                     table.insert(coins, part)
                 end
@@ -438,12 +465,12 @@ local function getAllActiveCoins()
             if container then
                 for _, c in ipairs(container:GetChildren()) do
                     for _, d in ipairs(c:GetDescendants()) do
-                        if (d:GetAttribute("CoinID") or string.find(string.lower(d.Name), "coin")) and isCoinPartValid(d) and not seen[d] then
+                        if (d:GetAttribute("CoinID") or string.find(string.lower(d.Name), "coin")) and d:IsA("BasePart") and not seen[d] and d.Transparency < 0.95 then
                             seen[d] = true
                             table.insert(coins, d)
                         end
                     end
-                    if (c:GetAttribute("CoinID") or string.find(string.lower(c.Name), "coin")) and isCoinPartValid(c) and not seen[c] then
+                    if (c:GetAttribute("CoinID") or string.find(string.lower(c.Name), "coin")) and c:IsA("BasePart") and not seen[c] and c.Transparency < 0.95 then
                         seen[c] = true
                         table.insert(coins, c)
                     end
@@ -453,14 +480,6 @@ local function getAllActiveCoins()
     end
 
     return coins
-end
-
-local function getEffectiveFarmSpeed()
-    local baseSpeed = math.clamp(tonumber(Config.FarmSpeed) or 28, 16, 60)
-    if Config.QuickFarm then
-        return math.clamp(baseSpeed * 1.45, 24, 85)
-    end
-    return baseSpeed
 end
 
 local function getCurrentCoinCount()
@@ -537,64 +556,105 @@ local function interactWithGunDrop(gunPart, gunObj)
     end
 end
 
-local function findKnifeThrowRemote(knife)
-    if not knife then return nil end
-    local searchRoots = {knife}
-    local eventsFolder = knife:FindFirstChild("Events")
-    if eventsFolder then
-        table.insert(searchRoots, eventsFolder)
-    end
+local function getClosestKnifeTarget(ignoreFOV)
+    local char = LocalPlayer.Character
+    local root = getRootPart(char)
+    if not root then return nil end
 
-    for _, container in ipairs(searchRoots) do
-        for _, name in ipairs({"KnifeThrown", "ThrowKnife", "Throw", "KnifeThrow"}) do
-            local found = container:FindFirstChild(name, true)
-            if found and (found:IsA("RemoteEvent") or found:IsA("RemoteFunction")) then
-                return found
-            end
-        end
-        for _, desc in ipairs(container:GetDescendants()) do
-            if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
-                local lname = string.lower(desc.Name)
-                if string.find(lname, "throw", 1, true) then
-                    return desc
+    local bestTarget = nil
+    if not ignoreFOV and Config.ShowFOV then
+        local mousePos = UserInputService:GetMouseLocation()
+        local bestDist = math.huge
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
+                local tRoot = getRootPart(p.Character)
+                if tRoot then
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(tRoot.Position)
+                    if onScreen then
+                        local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                        if dist <= Config.FOVRadius and dist < bestDist then
+                            bestDist = dist
+                            bestTarget = p
+                        end
+                    end
                 end
             end
         end
     end
 
-    return nil
-end
-
-local function fireThrowRemote(remote, originCF, targetPos)
-    if not remote then return false end
-    local targetCF = CFrame.new(targetPos)
-    local ok = false
-
-    if remote:IsA("RemoteEvent") then
-        ok = pcall(function() remote:FireServer(originCF, targetCF) end)
-        if not ok then
-            ok = pcall(function() remote:FireServer(targetCF, targetPos) end)
-        end
-        if not ok then
-            ok = pcall(function() remote:FireServer(targetPos) end)
-        end
-    elseif remote:IsA("RemoteFunction") then
-        ok = pcall(function() remote:InvokeServer(originCF, targetCF) end)
-        if not ok then
-            ok = pcall(function() remote:InvokeServer(targetCF, targetPos) end)
-        end
-        if not ok then
-            ok = pcall(function() remote:InvokeServer(targetPos) end)
+    if not bestTarget then
+        local minDist = math.huge
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
+                local tRoot = getRootPart(p.Character)
+                if tRoot then
+                    local d = (root.Position - tRoot.Position).Magnitude
+                    if d < minDist then
+                        minDist = d
+                        bestTarget = p
+                    end
+                end
+            end
         end
     end
 
-    return ok
+    return bestTarget
+end
+
+local function performKnifeThrow(ignoreFOV)
+    local char = LocalPlayer.Character
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    local knife = findRoleTool(char, bp, "Murderer")
+    if not knife or not char then
+        return false, "You do not have the Knife!"
+    end
+
+    local target = getClosestKnifeTarget(ignoreFOV)
+    if not target or not target.Character then
+        return false, "No alive target found!"
+    end
+
+    local hum = getHumanoid(char)
+    if hum and bp and knife.Parent == bp then
+        hum:EquipTool(knife)
+        task.wait(0.06)
+    end
+
+    local root = getRootPart(char)
+    local tRoot = getRootPart(target.Character)
+    if not root or not tRoot then
+        return false, "Target root missing!"
+    end
+
+    local targetPos = tRoot.Position
+    if Config.AimPrediction then
+        local lead = Config.PingComp and 0.16 or 0.12
+        targetPos = targetPos + (tRoot.AssemblyLinearVelocity * lead)
+    end
+
+    local handle = knife:FindFirstChild("Handle") or knife:FindFirstChildWhichIsA("BasePart")
+    local originCF = handle and handle.CFrame or (root.CFrame * CFrame.new(0, 1.2, -1.5))
+    local aimCF = CFrame.new(targetPos)
+
+    local throwRemote = findKnifeThrowRemote(knife)
+    if throwRemote then
+        pcall(function()
+            throwRemote:FireServer(originCF, aimCF)
+        end)
+        pcall(function()
+            knife:Activate()
+        end)
+        return true, target.Name
+    end
+
+    return false, "Knife throw remote not found!"
 end
 
 -- Forward UI & Action references
 local isSyncingUI = false
 local SyncUIWithConfig = function() end
 local RefreshFlingPlayerList = function() end
+local SetMobileButtonsVisible = function(_) end
 local ctrls = {}
 
 local SendNotification = function(title, text, duration)
@@ -614,6 +674,17 @@ local sheriffRow = { SetValue = function(_) end, SetColor = function(_) end }
 
 local Actions = {}
 
+function Actions.ThrowKnife()
+    task.spawn(function()
+        local ok, info = performKnifeThrow(true)
+        if ok then
+            SendNotification("Knife Throw", "Threw knife at " .. tostring(info) .. "!", 2)
+        else
+            SendNotification("Knife Throw", tostring(info), 2)
+        end
+    end)
+end
+
 function Actions.ShootMurderer()
     local murderer = nil
     for _, p in ipairs(Players:GetPlayers()) do
@@ -625,7 +696,7 @@ function Actions.ShootMurderer()
 
     local char = LocalPlayer.Character
     local bp = LocalPlayer:FindFirstChild("Backpack")
-    local gun = (bp and bp:FindFirstChild("Gun")) or (char and char:FindFirstChild("Gun"))
+    local gun = findRoleTool(char, bp, "Sheriff")
     if not gun then
         SendNotification("Identical", "You do not have the Gun!", 2)
         return
@@ -638,17 +709,35 @@ function Actions.ShootMurderer()
     local hum = getHumanoid(char)
     if hum and bp and gun.Parent == bp then
         hum:EquipTool(gun)
-        task.wait(0.1)
+        task.wait(0.08)
     end
 
     local root = getRootPart(char)
     local mRoot = getRootPart(murderer.Character)
-    if root and mRoot and gun:FindFirstChild("Shoot") then
+    if root and mRoot then
         local rayAtt = root:FindFirstChild("GunRaycastAttachment")
         local origin = rayAtt and rayAtt.WorldCFrame or root.CFrame
-        local targetCF = CFrame.new(mRoot.Position)
-        gun.Shoot:FireServer(origin, targetCF)
-        SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")!", 2)
+        local aimPos = mRoot.Position
+        if Config.AimPrediction then
+            local lead = Config.PingComp and 0.16 or 0.12
+            aimPos = aimPos + (mRoot.AssemblyLinearVelocity * lead)
+        end
+        local targetCF = CFrame.new(aimPos)
+        local shootRemote = gun:FindFirstChild("Shoot")
+        if not shootRemote then
+            for _, desc in ipairs(gun:GetDescendants()) do
+                if desc:IsA("RemoteEvent") and string.find(string.lower(desc.Name), "shoot", 1, true) then
+                    shootRemote = desc
+                    break
+                end
+            end
+        end
+        if shootRemote then
+            shootRemote:FireServer(origin, targetCF)
+            SendNotification("Identical", "Shot fired at Murderer (" .. murderer.Name .. ")!", 2)
+        else
+            SendNotification("Identical", "Gun shoot remote not found!", 2)
+        end
     end
 end
 
@@ -1169,48 +1258,6 @@ function Actions.Unload()
     end
 end
 
-local function getClosestKnifeTarget()
-    local char = LocalPlayer.Character
-    local root = getRootPart(char)
-    if not root then return nil end
-
-    local mousePos = UserInputService:GetMouseLocation()
-    local bestTarget = nil
-    local bestDist = math.huge
-
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
-            local tRoot = getRootPart(p.Character)
-            if tRoot then
-                local screenPos = Camera:WorldToViewportPoint(tRoot.Position)
-                local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-                if (not Config.ShowFOV or dist <= Config.FOVRadius) and dist < bestDist then
-                    bestDist = dist
-                    bestTarget = p
-                end
-            end
-        end
-    end
-
-    if not bestTarget then
-        local minDist = math.huge
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and isPlayerAlive(p) and p.Character then
-                local tRoot = getRootPart(p.Character)
-                if tRoot then
-                    local d = (root.Position - tRoot.Position).Magnitude
-                    if d < minDist then
-                        minDist = d
-                        bestTarget = p
-                    end
-                end
-            end
-        end
-    end
-
-    return bestTarget
-end
-
 local silentAimHookActive = true
 if hookmetamethod and getnamecallmethod then
     local oldNamecall
@@ -1218,10 +1265,10 @@ if hookmetamethod and getnamecallmethod then
         local method = getnamecallmethod()
 
         if silentAimHookActive and not checkcaller() and method == "FireServer" then
-            local lname = string.lower(tostring(self.Name))
-            if (lname == "knifethrown" or string.find(lname, "throw", 1, true)) and (Config.KnifeSilentAim or Config.SilentAim) then
+            local rName = self.Name
+            if (rName == "KnifeThrown" or string.find(string.lower(rName), "throw", 1, true)) and (Config.KnifeSilentAim or Config.SilentAim) then
                 local args = {...}
-                local target = getClosestKnifeTarget()
+                local target = getClosestKnifeTarget(false)
                 if target and target.Character then
                     local tRoot = getRootPart(target.Character)
                     if tRoot then
@@ -1230,18 +1277,20 @@ if hookmetamethod and getnamecallmethod then
                             local lead = Config.PingComp and 0.16 or 0.12
                             targetPos = targetPos + (tRoot.AssemblyLinearVelocity * lead)
                         end
-                        if #args >= 2 and typeof(args[2]) == "CFrame" then
+                        if typeof(args[2]) == "CFrame" then
                             args[2] = CFrame.new(targetPos)
-                        elseif #args >= 1 and typeof(args[1]) == "CFrame" then
+                        elseif typeof(args[2]) == "Vector3" then
+                            args[2] = targetPos
+                        elseif typeof(args[1]) == "CFrame" and args[2] == nil then
                             args[1] = CFrame.new(targetPos)
                         else
-                            args[#args + 1] = CFrame.new(targetPos)
+                            args[2] = CFrame.new(targetPos)
                         end
                         if setnamecallmethod then setnamecallmethod("FireServer") end
                         return oldNamecall(self, unpack(args))
                     end
                 end
-            elseif self.Name == "Shoot" and Config.SilentAim then
+            elseif rName == "Shoot" and Config.SilentAim then
                 local args = {...}
                 local murderer = nil
                 for _, p in ipairs(Players:GetPlayers()) do
@@ -1404,6 +1453,185 @@ local function Main()
         Rotation = -10,
         ZIndex = 12
     }, toggleButton)
+
+    -- 3D ROUND MOBILE ACTION BUTTONS (KNIFE THROW & MURDERER SHOOT)
+    local function create3DRoundMobileButton(name, pos, topColor, midColor, botColor, shadowColor, rimColor, mainText, subText, onPress)
+        local holder = make("Frame", {
+            Name = name,
+            Size = UDim2.fromOffset(66, 66),
+            Position = pos,
+            BackgroundTransparency = 1,
+            Visible = Config.MobileButtons,
+            ZIndex = 15
+        }, gui)
+
+        -- 3D Drop Shadow Base
+        local shadowBase = make("Frame", {
+            Name = "ShadowBase",
+            Size = UDim2.fromOffset(62, 62),
+            Position = UDim2.fromOffset(2, 6),
+            BackgroundColor3 = shadowColor,
+            BorderSizePixel = 0,
+            ZIndex = 15
+        }, holder)
+        make("UICorner", {CornerRadius = UDim.new(1, 0)}, shadowBase)
+
+        -- 3D Extruded Depth Ring
+        local depthRing = make("Frame", {
+            Name = "DepthRing",
+            Size = UDim2.fromOffset(62, 62),
+            Position = UDim2.fromOffset(2, 4),
+            BackgroundColor3 = botColor,
+            BorderSizePixel = 0,
+            ZIndex = 16
+        }, holder)
+        make("UICorner", {CornerRadius = UDim.new(1, 0)}, depthRing)
+
+        -- Interactive Round Button Cap
+        local cap = make("TextButton", {
+            Name = "Cap",
+            Size = UDim2.fromOffset(62, 62),
+            Position = UDim2.fromOffset(2, 0),
+            BackgroundColor3 = midColor,
+            Text = "",
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            ZIndex = 17
+        }, holder)
+        make("UICorner", {CornerRadius = UDim.new(1, 0)}, cap)
+        make("UIStroke", {
+            Color = rimColor,
+            Thickness = 1.6,
+            Transparency = 0.2
+        }, cap)
+
+        make("UIGradient", {
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, topColor),
+                ColorSequenceKeypoint.new(0.55, midColor),
+                ColorSequenceKeypoint.new(1, botColor)
+            }),
+            Rotation = 90
+        }, cap)
+
+        -- Top Specular Gloss Arc
+        local gloss = make("Frame", {
+            Name = "Gloss",
+            Size = UDim2.fromOffset(44, 20),
+            Position = UDim2.fromOffset(9, 4),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BackgroundTransparency = 0.78,
+            BorderSizePixel = 0,
+            ZIndex = 18
+        }, cap)
+        make("UICorner", {CornerRadius = UDim.new(1, 0)}, gloss)
+
+        -- 3D Embossed Title Text
+        make("TextLabel", {
+            Size = UDim2.new(1, -6, 0, 20),
+            Position = UDim2.fromOffset(3, 15),
+            BackgroundTransparency = 1,
+            Text = mainText,
+            Font = Enum.Font.GothamBlack,
+            TextSize = 12,
+            TextColor3 = Color3.new(1, 1, 1),
+            TextStrokeColor3 = shadowColor,
+            TextStrokeTransparency = 0.25,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            ZIndex = 19
+        }, cap)
+
+        -- Sub-label
+        make("TextLabel", {
+            Size = UDim2.new(1, -6, 0, 13),
+            Position = UDim2.fromOffset(3, 35),
+            BackgroundTransparency = 1,
+            Text = subText,
+            Font = Enum.Font.GothamBold,
+            TextSize = 8,
+            TextColor3 = Color3.fromRGB(240, 244, 255),
+            TextStrokeColor3 = shadowColor,
+            TextStrokeTransparency = 0.4,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            ZIndex = 19
+        }, cap)
+
+        local btnDragging, btnDragStart, btnStartPos, btnMoved = false, nil, nil, false
+        cap.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                btnDragging = true
+                btnMoved = false
+                btnDragStart = input.Position
+                btnStartPos = holder.Position
+                tween(cap, 0.08, {Position = UDim2.fromOffset(2, 3)})
+            end
+        end)
+
+        UIS.InputChanged:Connect(function(input)
+            if btnDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - btnDragStart
+                if delta.Magnitude > 6 then
+                    btnMoved = true
+                end
+                holder.Position = UDim2.new(
+                    btnStartPos.X.Scale,
+                    btnStartPos.X.Offset + delta.X,
+                    btnStartPos.Y.Scale,
+                    btnStartPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+
+        UIS.InputEnded:Connect(function(input)
+            if btnDragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+                btnDragging = false
+                tween(cap, 0.1, {Position = UDim2.fromOffset(2, 0)})
+            end
+        end)
+
+        cap.MouseButton1Click:Connect(function()
+            if not btnMoved and onPress then
+                onPress()
+            end
+        end)
+
+        return holder
+    end
+
+    local mobileThrowBtn = create3DRoundMobileButton(
+        "MobileKnifeThrowBtn",
+        UDim2.new(1, -86, 0.5, -76),
+        Color3.fromRGB(255, 118, 138),
+        Color3.fromRGB(225, 52, 78),
+        Color3.fromRGB(132, 20, 38),
+        Color3.fromRGB(58, 8, 18),
+        Color3.fromRGB(255, 195, 205),
+        "THROW",
+        "KNIFE",
+        Actions.ThrowKnife
+    )
+
+    local mobileShootBtn = create3DRoundMobileButton(
+        "MobileMurderShootBtn",
+        UDim2.new(1, -86, 0.5, 8),
+        Color3.fromRGB(115, 185, 255),
+        Color3.fromRGB(48, 128, 240),
+        Color3.fromRGB(22, 66, 152),
+        Color3.fromRGB(10, 28, 72),
+        Color3.fromRGB(195, 228, 255),
+        "SHOOT",
+        "MURDER",
+        Actions.ShootMurderer
+    )
+
+    SetMobileButtonsVisible = function(v)
+        if mobileThrowBtn and mobileThrowBtn.Parent then
+            mobileThrowBtn.Visible = v
+        end
+        if mobileShootBtn and mobileShootBtn.Parent then
+            mobileShootBtn.Visible = v
+        end
+    end
 
     local scale = make("UIScale", {Scale = 1}, window)
     local baseScale = 1
@@ -2297,42 +2525,49 @@ local function Main()
     ctrls.AnnounceRoles = toggleRow(homeLeft, 8, "Auto Announce Roles", "Enables role announcement toggle state", nil, function(v) Config.AnnounceRoles = v end, Config.AnnounceRoles)
 
     buttonRow(homeRight, 1, "SHOOT MURDERER", C.row, Actions.ShootMurderer)
-    buttonRow(homeRight, 2, "GRAB GUN", C.row, Actions.GrabGun)
-    buttonRow(homeRight, 3, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
-    buttonRow(homeRight, 4, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
-    buttonRow(homeRight, 5, "COPY DISCORD INVITE", C.row, Actions.CopyDiscordInvite)
-    buttonRow(homeRight, 6, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
-    buttonRow(homeRight, 7, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
-    buttonRow(homeRight, 8, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
+    buttonRow(homeRight, 2, "THROW KNIFE", C.row, Actions.ThrowKnife)
+    buttonRow(homeRight, 3, "GRAB GUN", C.row, Actions.GrabGun)
+    buttonRow(homeRight, 4, "ANNOUNCE ROLES IN CHAT", C.row, Actions.AnnounceRoles)
+    buttonRow(homeRight, 5, "COPY DEATH LIST", C.row, Actions.CopyDeathList)
+    buttonRow(homeRight, 6, "COPY DISCORD INVITE", C.row, Actions.CopyDiscordInvite)
+    buttonRow(homeRight, 7, "SAVE CONFIGURATION", C.row, Actions.SaveConfig)
+    buttonRow(homeRight, 8, "RELOAD CONFIGURATION", C.row, Actions.ReloadConfig)
+    buttonRow(homeRight, 9, "RESET DEFAULTS", C.row, Actions.ResetDefaults)
 
     -- 2. COMBAT TAB
     local combatTab = newTab("Combat", 2)
-    local combatLeft = column(combatTab, 0, 0.5, "SHERIFF & GUN")
+    local combatLeft = column(combatTab, 0, 0.5, "SHERIFF, GUN & MOBILE BUTTONS")
     local combatRight = column(combatTab, 0.5, 0.5, "MURDERER, KNIFE & HITBOX")
 
-    ctrls.AutoShoot = toggleRow(combatLeft, 1, "Auto Shoot Murderer", "Fires revolver at Murderer", nil, function(v) Config.AutoShoot = v end, Config.AutoShoot)
-    ctrls.SilentAim = toggleRow(combatLeft, 2, "Silent Aim", "Redirects gun/knife raycast to target", nil, function(v) Config.SilentAim = v end, Config.SilentAim)
-    ctrls.AimPrediction = toggleRow(combatLeft, 3, "Aim Prediction", "Compensates for target velocity", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
-    ctrls.PingComp = toggleRow(combatLeft, 4, "Ping Compensation", "Adjusts lead time for ping", nil, function(v) Config.PingComp = v end, Config.PingComp)
-    ctrls.SingleShot = toggleRow(combatLeft, 5, "Single Shot Lock", "Fires one verified shot then stops", nil, function(v) Config.SingleShot = v end, Config.SingleShot)
-    ctrls.AutoEquipGun = toggleRow(combatLeft, 6, "Auto Equip Gun", "Pulls out revolver when needed", nil, function(v) Config.AutoEquipGun = v end, Config.AutoEquipGun)
-    ctrls.GrabGunAuto = toggleRow(combatLeft, 7, "Full Gun Grabber", "Automatically picks up dropped gun", nil, function(v) Config.GrabGunAuto = v end, Config.GrabGunAuto)
-    ctrls.ShowFOV = toggleRow(combatLeft, 8, "Show FOV Circle", "Draws FOV circle on screen", nil, function(v) Config.ShowFOV = v end, Config.ShowFOV)
-    ctrls.FOVRadius = sliderRow(combatLeft, 9, "FOV Radius", 50, 700, Config.FOVRadius, " px", function(v) Config.FOVRadius = v end)
-    ctrls.GunGrabDist = sliderRow(combatLeft, 10, "Gun Grab Distance", 25, 600, Config.GunGrabDist, " studs", function(v) Config.GunGrabDist = v end)
+    ctrls.MobileButtons = toggleRow(combatLeft, 1, "Mobile 3D Action Buttons", "Shows 3D round THROW & SHOOT buttons", nil, function(v)
+        Config.MobileButtons = v
+        SetMobileButtonsVisible(v)
+    end, Config.MobileButtons)
+    buttonRow(combatLeft, 2, "SHOOT MURDERER NOW", C.row, Actions.ShootMurderer)
+    ctrls.AutoShoot = toggleRow(combatLeft, 3, "Auto Shoot Murderer", "Fires revolver at Murderer", nil, function(v) Config.AutoShoot = v end, Config.AutoShoot)
+    ctrls.SilentAim = toggleRow(combatLeft, 4, "Silent Aim", "Redirects gun/knife raycast to target", nil, function(v) Config.SilentAim = v end, Config.SilentAim)
+    ctrls.AimPrediction = toggleRow(combatLeft, 5, "Aim Prediction", "Compensates for target velocity", nil, function(v) Config.AimPrediction = v end, Config.AimPrediction)
+    ctrls.PingComp = toggleRow(combatLeft, 6, "Ping Compensation", "Adjusts lead time for ping", nil, function(v) Config.PingComp = v end, Config.PingComp)
+    ctrls.SingleShot = toggleRow(combatLeft, 7, "Single Shot Lock", "Fires one verified shot then stops", nil, function(v) Config.SingleShot = v end, Config.SingleShot)
+    ctrls.AutoEquipGun = toggleRow(combatLeft, 8, "Auto Equip Gun", "Pulls out revolver when needed", nil, function(v) Config.AutoEquipGun = v end, Config.AutoEquipGun)
+    ctrls.GrabGunAuto = toggleRow(combatLeft, 9, "Full Gun Grabber", "Automatically picks up dropped gun", nil, function(v) Config.GrabGunAuto = v end, Config.GrabGunAuto)
+    ctrls.ShowFOV = toggleRow(combatLeft, 10, "Show FOV Circle", "Draws FOV circle on screen", nil, function(v) Config.ShowFOV = v end, Config.ShowFOV)
+    ctrls.FOVRadius = sliderRow(combatLeft, 11, "FOV Radius", 50, 700, Config.FOVRadius, " px", function(v) Config.FOVRadius = v end)
+    ctrls.GunGrabDist = sliderRow(combatLeft, 12, "Gun Grab Distance", 25, 600, Config.GunGrabDist, " studs", function(v) Config.GunGrabDist = v end)
 
-    ctrls.KillAura = toggleRow(combatRight, 1, "Kill Aura", "Strikes players inside aura reach", nil, function(v) Config.KillAura = v end, Config.KillAura)
-    ctrls.AutoKill = toggleRow(combatRight, 2, "Auto Kill Innocents", "Eliminates targets with knife", nil, function(v) Config.AutoKill = v end, Config.AutoKill)
-    ctrls.KillMode = dropdownRow(combatRight, 3, "Kill Mode", {"Legit", "Blatant", "Throw"}, Config.KillMode, function(v) Config.KillMode = v end)
-    ctrls.KnifeSilentAim = toggleRow(combatRight, 4, "Knife Silent Aim", "Redirects thrown knives to target", nil, function(v) Config.KnifeSilentAim = v end, Config.KnifeSilentAim)
-    ctrls.KillAll = toggleRow(combatRight, 5, "Kill All (No Limit)", "Hits all living players in range", nil, function(v) Config.KillAll = v end, Config.KillAll)
-    ctrls.AuraRange = sliderRow(combatRight, 6, "Aura Range", 5, 45, Config.AuraRange, " studs", function(v) Config.AuraRange = v end)
-    ctrls.ShowAuraRing = toggleRow(combatRight, 7, "Show Aura Ring", "Draws aura ring under character", nil, function(v) Config.ShowAuraRing = v end, Config.ShowAuraRing)
-    ctrls.AutoEquipKnife = toggleRow(combatRight, 8, "Auto Equip Knife", "Equips knife automatically", nil, function(v) Config.AutoEquipKnife = v end, Config.AutoEquipKnife)
-    ctrls.ProximityKnife = toggleRow(combatRight, 9, "Proximity Knife", "Draws blade when enemy nears", nil, function(v) Config.ProximityKnife = v end, Config.ProximityKnife)
-    ctrls.KnifeProxDist = sliderRow(combatRight, 10, "Proximity Distance", 5, 50, Config.KnifeProxDist, " studs", function(v) Config.KnifeProxDist = v end)
+    buttonRow(combatRight, 1, "THROW KNIFE NOW", C.row, Actions.ThrowKnife)
+    ctrls.KillAura = toggleRow(combatRight, 2, "Kill Aura", "Strikes players inside aura reach", nil, function(v) Config.KillAura = v end, Config.KillAura)
+    ctrls.AutoKill = toggleRow(combatRight, 3, "Auto Kill Innocents", "Eliminates targets with knife", nil, function(v) Config.AutoKill = v end, Config.AutoKill)
+    ctrls.KillMode = dropdownRow(combatRight, 4, "Kill Mode", {"Legit", "Blatant", "Throw"}, Config.KillMode, function(v) Config.KillMode = v end)
+    ctrls.KnifeSilentAim = toggleRow(combatRight, 5, "Knife Silent Aim", "Redirects thrown knives to target", nil, function(v) Config.KnifeSilentAim = v end, Config.KnifeSilentAim)
+    ctrls.KillAll = toggleRow(combatRight, 6, "Kill All (No Limit)", "Hits all living players in range", nil, function(v) Config.KillAll = v end, Config.KillAll)
+    ctrls.AuraRange = sliderRow(combatRight, 7, "Aura Range", 5, 45, Config.AuraRange, " studs", function(v) Config.AuraRange = v end)
+    ctrls.ShowAuraRing = toggleRow(combatRight, 8, "Show Aura Ring", "Draws aura ring under character", nil, function(v) Config.ShowAuraRing = v end, Config.ShowAuraRing)
+    ctrls.AutoEquipKnife = toggleRow(combatRight, 9, "Auto Equip Knife", "Equips knife automatically", nil, function(v) Config.AutoEquipKnife = v end, Config.AutoEquipKnife)
+    ctrls.ProximityKnife = toggleRow(combatRight, 10, "Proximity Knife", "Draws blade when enemy nears", nil, function(v) Config.ProximityKnife = v end, Config.ProximityKnife)
+    ctrls.KnifeProxDist = sliderRow(combatRight, 11, "Proximity Distance", 5, 50, Config.KnifeProxDist, " studs", function(v) Config.KnifeProxDist = v end)
 
-    ctrls.HitboxExpander = toggleRow(combatRight, 11, "Hitbox Expander", "Expands target root hitboxes", nil, function(v)
+    ctrls.HitboxExpander = toggleRow(combatRight, 12, "Hitbox Expander", "Expands target root hitboxes", nil, function(v)
         Config.HitboxExpander = v
         if not v then
             for part, sz in pairs(originalHitboxSizes) do
@@ -2344,10 +2579,10 @@ local function Main()
             originalHitboxSizes = {}
         end
     end, Config.HitboxExpander)
-    ctrls.HitboxSize = sliderRow(combatRight, 12, "Hitbox Size", 4, 30, Config.HitboxSize, " studs", function(v) Config.HitboxSize = v end)
-    ctrls.HitboxTransparency = sliderRow(combatRight, 13, "Hitbox Transparency", 0, 1, Config.HitboxTransparency, "", function(v) Config.HitboxTransparency = v end, true)
-    ctrls.FollowMurderer = toggleRow(combatRight, 14, "Murderer Follow", "Follows behind Murderer", nil, function(v) Config.FollowMurderer = v end, Config.FollowMurderer)
-    ctrls.FollowDist = sliderRow(combatRight, 15, "Follow Offset", 8, 40, Config.FollowDist, " studs", function(v) Config.FollowDist = v end)
+    ctrls.HitboxSize = sliderRow(combatRight, 13, "Hitbox Size", 4, 30, Config.HitboxSize, " studs", function(v) Config.HitboxSize = v end)
+    ctrls.HitboxTransparency = sliderRow(combatRight, 14, "Hitbox Transparency", 0, 1, Config.HitboxTransparency, "", function(v) Config.HitboxTransparency = v end, true)
+    ctrls.FollowMurderer = toggleRow(combatRight, 15, "Murderer Follow", "Follows behind Murderer", nil, function(v) Config.FollowMurderer = v end, Config.FollowMurderer)
+    ctrls.FollowDist = sliderRow(combatRight, 16, "Follow Offset", 8, 40, Config.FollowDist, " studs", function(v) Config.FollowDist = v end)
 
     -- 3. VISUALS TAB
     local visualsTab = newTab("Visuals", 3)
@@ -2392,18 +2627,8 @@ local function Main()
     local farmLeft = column(farmTab, 0, 0.5, "COIN FARMING")
     local farmRight = column(farmTab, 0.5, 0.5, "SAFETY & BAG LIMITS")
 
-    ctrls.CoinFarm = toggleRow(farmLeft, 1, "Auto Farm Coins", "Collects active coins on map", nil, function(v)
-        Config.CoinFarm = v
-        if not v then
-            stopActiveFarmTween()
-        end
-    end, Config.CoinFarm)
-    ctrls.FarmMethod = dropdownRow(farmLeft, 2, "Movement Method", {"Glide", "Tween", "Walk"}, Config.FarmMethod, function(v)
-        Config.FarmMethod = v
-        if v ~= "Tween" then
-            stopActiveFarmTween()
-        end
-    end)
+    ctrls.CoinFarm = toggleRow(farmLeft, 1, "Auto Farm Coins", "Collects active coins on map", nil, function(v) Config.CoinFarm = v end, Config.CoinFarm)
+    ctrls.FarmMethod = dropdownRow(farmLeft, 2, "Movement Method", {"Glide", "Tween", "Walk"}, Config.FarmMethod, function(v) Config.FarmMethod = v end)
     ctrls.FarmSpeed = sliderRow(farmLeft, 3, "Farm Speed", 16, 60, Config.FarmSpeed, " studs/s", function(v) Config.FarmSpeed = v end)
     ctrls.QuickFarm = toggleRow(farmLeft, 4, "Quick Mode", "High velocity rapid coin sweep", nil, function(v) Config.QuickFarm = v end, Config.QuickFarm)
 
@@ -2692,6 +2917,7 @@ local function Main()
                 end
             end
         end
+        SetMobileButtonsVisible(Config.MobileButtons)
         isSyncingUI = false
     end
 
@@ -2759,7 +2985,6 @@ local function Main()
             Config.AutoShoot = false
             Config.CoinFarm = false
             Config.AutoKill = false
-            stopActiveFarmTween()
             SyncUIWithConfig()
             SendNotification("Identical", "EMERGENCY STOP: Features halted.", 2)
             return
@@ -2997,7 +3222,6 @@ local function Main()
     local lastFarmTick = 0
     local lastShootTick = 0
     local lastKnifeTick = 0
-    local lastTweenCoin = nil
     local lastSafePosition = nil
     local roundStartedFlag = false
     local auraRingPart = nil
@@ -3080,46 +3304,6 @@ local function Main()
         end
     end
 
-    local function triggerKnifeThrow(char, root, hum, bp, knife)
-        if not knife then return false end
-        if hum and bp and knife.Parent == bp then
-            pcall(function() hum:EquipTool(knife) end)
-        end
-
-        local target = getClosestKnifeTarget()
-        local targetPos = nil
-        if target and target.Character then
-            local tRoot = getRootPart(target.Character)
-            if tRoot then
-                local d = (root.Position - tRoot.Position).Magnitude
-                if Config.KillAll or d <= math.max(Config.AuraRange, 35) then
-                    targetPos = tRoot.Position
-                    if Config.AimPrediction then
-                        local lead = Config.PingComp and 0.16 or 0.12
-                        targetPos = targetPos + (tRoot.AssemblyLinearVelocity * lead)
-                    end
-                end
-            end
-        end
-
-        if not targetPos then
-            targetPos = root.Position + (root.CFrame.LookVector * 28)
-        end
-
-        local handle = knife:FindFirstChild("Handle")
-        local originCF = (handle and handle:IsA("BasePart") and handle.CFrame) or root.CFrame
-        local remote = findKnifeThrowRemote(knife)
-
-        if remote then
-            fireThrowRemote(remote, originCF, targetPos)
-            pcall(function() knife:Activate() end)
-            return true
-        end
-
-        pcall(function() knife:Activate() end)
-        return true
-    end
-
     table.insert(activeConnections, RunService.Stepped:Connect(function()
         if Config.AntiFling and not isFlinging then
             for _, p in ipairs(Players:GetPlayers()) do
@@ -3149,11 +3333,11 @@ local function Main()
             local velMag = vel.Magnitude
             local angMag = angVel.Magnitude
 
-            if not isFlinging and not Config.CoinFarm and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
+            if not isFlinging and hum.Health > 0 and hum.FloorMaterial ~= Enum.Material.Air and velMag < 75 and angMag < 35 then
                 lastSafePosition = root.CFrame
             end
 
-            if not isFlinging and not Config.CoinFarm and (Config.AntiFling or Config.AntiVoid) and lastSafePosition then
+            if not isFlinging and (Config.AntiFling or Config.AntiVoid) and lastSafePosition then
                 if velMag > 120 or angMag > 90 then
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
@@ -3169,13 +3353,10 @@ local function Main()
         end
 
         if hum then
-            if Config.CoinFarm then
-                local farmSpd = getEffectiveFarmSpeed()
-                if hum.WalkSpeed ~= farmSpd then hum.WalkSpeed = farmSpd end
-            elseif Config.SpeedEnabled then
+            if Config.SpeedEnabled then
                 if hum.WalkSpeed ~= Config.SpeedValue then hum.WalkSpeed = Config.SpeedValue end
             else
-                if hum.WalkSpeed ~= 16 then hum.WalkSpeed = 16 end
+                if hum.WalkSpeed ~= 16 and not Config.CoinFarm then hum.WalkSpeed = 16 end
             end
 
             if Config.JumpEnabled then
@@ -3327,7 +3508,7 @@ local function Main()
 
         if Config.AutoShoot and root and (now - lastShootTick >= 0.5) then
             local bp = LocalPlayer:FindFirstChild("Backpack")
-            local gun = (bp and bp:FindFirstChild("Gun")) or (char and char:FindFirstChild("Gun"))
+            local gun = findRoleTool(char, bp, "Sheriff")
             if gun and murderer and murderer.Character and isPlayerAlive(murderer) then
                 local mRoot = getRootPart(murderer.Character)
                 if mRoot then
@@ -3352,17 +3533,36 @@ local function Main()
             end
         end
 
-        if (Config.KillAura or Config.AutoKill) and root and (now - lastKnifeTick >= 0.22) then
+        if (Config.KillAura or Config.AutoKill) and root and (now - lastKnifeTick >= 0.25) then
             local bp = LocalPlayer:FindFirstChild("Backpack")
-            local knife = (bp and bp:FindFirstChild("Knife")) or (char and char:FindFirstChild("Knife"))
+            local knife = findRoleTool(char, bp, "Murderer")
             if knife then
                 if hum and bp and knife.Parent == bp then
                     hum:EquipTool(knife)
                 end
                 local events = knife:FindFirstChild("Events")
                 if Config.KillMode == "Throw" then
-                    if triggerKnifeThrow(char, root, hum, bp, knife) then
-                        lastKnifeTick = now
+                    local throwRemote = findKnifeThrowRemote(knife)
+                    if throwRemote then
+                        local target = getClosestKnifeTarget(false)
+                        if target and target.Character then
+                            local tRoot = getRootPart(target.Character)
+                            if tRoot then
+                                local d = (root.Position - tRoot.Position).Magnitude
+                                if Config.KillAll or d <= Config.AuraRange then
+                                    local targetPos = tRoot.Position
+                                    if Config.AimPrediction then
+                                        local lead = Config.PingComp and 0.16 or 0.12
+                                        targetPos = targetPos + (tRoot.AssemblyLinearVelocity * lead)
+                                    end
+                                    local handle = knife:FindFirstChild("Handle") or knife:FindFirstChildWhichIsA("BasePart")
+                                    local originCF = handle and handle.CFrame or (root.CFrame * CFrame.new(0, 1.2, -1.5))
+                                    throwRemote:FireServer(originCF, CFrame.new(targetPos))
+                                    pcall(function() knife:Activate() end)
+                                    lastKnifeTick = now
+                                end
+                            end
+                        end
                     end
                 elseif events and events:FindFirstChild("HandleTouched") then
                     for _, p in ipairs(Players:GetPlayers()) do
@@ -3433,101 +3633,84 @@ local function Main()
             end
         end
 
-        if Config.CoinFarm and root then
+        if Config.CoinFarm and root and (now - lastFarmTick >= 0.05) then
             if Config.BagFullStop and getCurrentCoinCount() >= Config.CoinBagCap then
                 Config.CoinFarm = false
-                stopActiveFarmTween()
                 if ctrls.CoinFarm then ctrls.CoinFarm.Set(false, true) end
                 SendNotification("Identical", "Coin bag limit reached! Farming stopped.", 3)
             else
                 local coins = getAllActiveCoins()
                 local bestCoin = nil
-                local bestDist = math.huge
-                local mRoot = (murderer and murderer.Character and isPlayerAlive(murderer)) and getRootPart(murderer.Character) or nil
+                local bestDist = 1000
 
                 for _, c in ipairs(coins) do
-                    if isCoinPartValid(c) then
-                        local d = (root.Position - c.Position).Magnitude
-                        local isSafe = true
-                        if Config.SafeCoinFarm and mRoot then
-                            if (c.Position - mRoot.Position).Magnitude < Config.SafetyRadius then
-                                isSafe = false
-                            end
+                    local d = (root.Position - c.Position).Magnitude
+                    local isSafe = true
+                    if Config.SafeCoinFarm and murderer and murderer.Character and isPlayerAlive(murderer) then
+                        local mRoot = getRootPart(murderer.Character)
+                        if mRoot and (c.Position - mRoot.Position).Magnitude < Config.SafetyRadius then
+                            isSafe = false
                         end
-                        if isSafe and d < bestDist then
-                            bestDist = d
-                            bestCoin = c
-                        end
+                    end
+                    if isSafe and d < bestDist then
+                        bestDist = d
+                        bestCoin = c
                     end
                 end
 
                 if bestCoin then
-                    local speed = getEffectiveFarmSpeed()
-                    if hum and hum.WalkSpeed ~= speed then
-                        hum.WalkSpeed = speed
+                    if hum then
+                        hum.WalkSpeed = Config.FarmSpeed
                     end
+                    local targetPos = bestCoin.Position
+                    local dist = (root.Position - targetPos).Magnitude
 
-                    for _, part in ipairs(char:GetDescendants()) do
+                    for _, part in ipairs(char:GetChildren()) do
                         if part:IsA("BasePart") then
                             part.CanCollide = false
                         end
                     end
 
-                    local targetPos = bestCoin.Position
-                    local dist = (root.Position - targetPos).Magnitude
+                    local speed = Config.QuickFarm and 38 or math.clamp(Config.FarmSpeed, 16, 42)
 
-                    if dist <= 6.5 then
-                        stopActiveFarmTween()
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        fireTouch(root, bestCoin)
-                        local rHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
-                        if rHand then fireTouch(rHand, bestCoin) end
-                        if dist <= 2.5 and Config.QuickFarm then
-                            root.CFrame = CFrame.new(targetPos)
-                        end
-                    elseif Config.FarmMethod == "Tween" then
-                        if lastTweenCoin ~= bestCoin or not activeFarmTween then
-                            stopActiveFarmTween()
-                            lastTweenCoin = bestCoin
-                            local travelTime = math.clamp(dist / math.max(speed, 16), 0.04, 1.5)
-                            local tw = TweenService:Create(
-                                root,
-                                TweenInfo.new(travelTime, Enum.EasingStyle.Linear),
-                                {CFrame = CFrame.new(targetPos)}
-                            )
-                            activeFarmTween = tw
-                            tw:Play()
+                    if Config.FarmMethod == "Tween" then
+                        local travelTime = math.max(dist / speed, 0.05)
+                        local tweenInfo = TweenInfo.new(travelTime, Enum.EasingStyle.Linear)
+                        local tw = TweenService:Create(root, tweenInfo, {CFrame = CFrame.new(targetPos)})
+                        tw:Play()
+                        if dist < 7 then
+                            fireTouch(root, bestCoin)
+                            local rHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+                            if rHand then fireTouch(rHand, bestCoin) end
                         end
                     elseif Config.FarmMethod == "Glide" or Config.QuickFarm then
-                        stopActiveFarmTween()
-                        local delta = targetPos - root.Position
-                        local stepDist = delta.Magnitude
-                        if stepDist > 0.1 then
-                            local desiredVel = delta.Unit * math.min(speed, math.max(stepDist * 14, 12))
-                            root.AssemblyLinearVelocity = desiredVel
+                        local dir = (targetPos - root.Position)
+                        if dir.Magnitude > 0.3 then
+                            root.AssemblyLinearVelocity = dir.Unit * speed
                         else
                             root.AssemblyLinearVelocity = Vector3.zero
                         end
+                        if dist < 7 then
+                            fireTouch(root, bestCoin)
+                            local rHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+                            if rHand then fireTouch(rHand, bestCoin) end
+                        end
                     else
-                        stopActiveFarmTween()
-                        if hum and (now - lastFarmTick >= 0.06) then
+                        if hum then
                             hum:MoveTo(targetPos)
-                            if targetPos.Y > root.Position.Y + 2.2 and hum:GetState() ~= Enum.HumanoidStateType.Jumping then
+                            if targetPos.Y > root.Position.Y + 2.0 and hum:GetState() ~= Enum.HumanoidStateType.Jumping then
                                 hum:ChangeState(Enum.HumanoidStateType.Jumping)
                             end
-                            lastFarmTick = now
+                        end
+                        if dist < 7 then
+                            fireTouch(root, bestCoin)
+                            local rHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+                            if rHand then fireTouch(rHand, bestCoin) end
                         end
                     end
-                else
-                    stopActiveFarmTween()
-                    if Config.FarmMethod == "Glide" or Config.QuickFarm then
-                        root.AssemblyLinearVelocity = Vector3.zero
-                    end
+                    lastFarmTick = now
                 end
             end
-        else
-            stopActiveFarmTween()
-            lastTweenCoin = nil
         end
     end))
 
@@ -3578,7 +3761,6 @@ local function Main()
     end))
 
     getgenv().IdenticalMM2Unload = function()
-        stopActiveFarmTween()
         for _, conn in ipairs(activeConnections) do
             pcall(function() conn:Disconnect() end)
         end
@@ -3605,6 +3787,12 @@ local function Main()
             end
         end
         originalHitboxSizes = {}
+        if mobileThrowBtn and mobileThrowBtn.Parent then
+            pcall(function() mobileThrowBtn:Destroy() end)
+        end
+        if mobileShootBtn and mobileShootBtn.Parent then
+            pcall(function() mobileShootBtn:Destroy() end)
+        end
         if toggleButton and toggleButton.Parent then
             pcall(function() toggleButton:Destroy() end)
         end
