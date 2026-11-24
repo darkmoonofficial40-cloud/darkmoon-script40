@@ -1,1 +1,1 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/darkmoonofficial40-cloud/darkmoon-script40/refs/heads/main/Darkmoonhub"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/realdarkmoon/Mm2/refs/heads/main/MM2"))()
